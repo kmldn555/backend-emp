@@ -1,0 +1,240 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model User {
+  id             Int      @id @default(autoincrement())
+  email          String   @unique
+  name           String
+  password       String
+  role           UserRole @default(customer)
+  profilePicture String
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  referralCode   String   @unique
+  points         Int
+
+  referrals     Referral[]
+  pointLots     PointLot[]
+  coupons       Coupon[]
+  notifications Notification[]
+  transactions  Transaction[]
+  events        Event[]
+  attendances   Attendance[]
+  reviews       Review[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  customer
+  eventOrganizer
+}
+
+model Referral {
+  id             Int @id @default(autoincrement())
+  userId         Int
+  referredUserId Int
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("referrals")
+}
+
+model PointLot {
+  id              Int      @id @default(autoincrement())
+  userId          Int
+  amount          Int
+  remainingAmount Int
+  creditedAt      DateTime
+  expiresAt       DateTime
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("pointLots")
+}
+
+model Coupon {
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  code           String   @unique
+  discountValue  Int
+  minTransaction Int
+  expiresAt      DateTime
+  isUsed         Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  user         User          @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+
+  @@map("coupons")
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  title     String
+  message   String   @db.Text
+  is_read   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("notifications")
+}
+
+model Transaction {
+  id              Int               @id @default(autoincrement())
+  userId          Int
+  voucherId       Int?
+  couponId        Int?
+  status          StatusTransaction @default(pending)
+  subtotal        Int
+  voucherDiscount Int               @default(0)
+  couponDiscount  Int               @default(0)
+  pointsDiscount  Int               @default(0)
+  total_amount    Int
+  paymentDeadline DateTime
+  admin_deadline  DateTime
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  payment_proof   String
+
+  user             User              @relation(fields: [userId], references: [id])
+  voucher          Voucher?          @relation(fields: [voucherId], references: [id])
+  coupon           Coupon?           @relation(fields: [couponId], references: [id])
+  transactionItems TransactionItem[]
+  attendances      Attendance[]
+
+  @@map("transactions")
+}
+
+enum StatusTransaction {
+  pending // Pesanan tiket dibuat, menunggu pembayaran dari pembeli
+  paid // Pembayaran berhasil dan tiket sudah dikonfirmasi
+  cancelled // Transaksi dibatalkan, misalnya user membatalkan atau payment deadline lewat
+  refunded // Dana transaksi sudah dikembalikan
+}
+
+model Category {
+  id        Int      @id @default(autoincrement())
+  name      String   @unique
+  createdAt DateTime @default(now())
+
+  events Event[]
+
+  @@map("categories")
+}
+
+model Event {
+  id            Int      @id @default(autoincrement())
+  userId        Int
+  categoryId    Int
+  name          String
+  description   String   @db.Text
+  location      String
+  totalSeat     Int
+  availableSeat Int
+  startDate     DateTime
+  endDate       DateTime
+  thumbnail     String
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  user        User         @relation(fields: [userId], references: [id])
+  category    Category     @relation(fields: [categoryId], references: [id])
+  vouchers    Voucher[]
+  ticketTypes TicketType[]
+  attendances Attendance[]
+
+  @@map("events")
+}
+
+model Voucher {
+  id            Int      @id @default(autoincrement())
+  eventId       Int
+  code          String   @unique
+  notes         String   @db.Text
+  discountValue Int
+  maxUsage      Int
+  usedCount     Int
+  startAt       DateTime
+  expiresAt     DateTime
+  isActive      Boolean
+  createdAt     DateTime @default(now())
+
+  transactions Transaction[]
+  event        Event         @relation(fields: [eventId], references: [id])
+
+  @@map("vouchers")
+}
+
+model TicketType {
+  id            Int      @id @default(autoincrement())
+  eventId       Int
+  name          String
+  price         Int
+  totalSeat     Int
+  availableSeat Int
+  createdAt     DateTime @default(now())
+
+  event            Event             @relation(fields: [eventId], references: [id])
+  transactionItems TransactionItem[]
+
+  @@map("ticketTypes")
+}
+
+model TransactionItem {
+  id            Int @id @default(autoincrement())
+  transactionId Int
+  ticketTypeId  Int
+  quantity      Int
+  price         Int
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  ticketType  TicketType  @relation(fields: [ticketTypeId], references: [id])
+
+  @@map("transactionItems")
+}
+
+model Attendance {
+  id             Int      @id @default(autoincrement())
+  userId         Int
+  eventId        Int
+  transactionId  Int
+  ticketQuantity Int
+  attended       Boolean  @default(false)
+  checkedInAt    DateTime
+
+  user        User        @relation(fields: [userId], references: [id])
+  event       Event       @relation(fields: [eventId], references: [id])
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  reviews     Review[]
+
+  @@map("attendances")
+}
+
+model Review {
+  id           Int      @id @default(autoincrement())
+  userId       Int
+  attendanceId Int
+  rating       Int
+  comment      String   @db.Text
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user       User       @relation(fields: [userId], references: [id])
+  attendance Attendance @relation(fields: [attendanceId], references: [id])
+
+  @@map("reviews")
+}
