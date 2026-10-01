@@ -17,7 +17,7 @@ model User {
   email          String   @unique
   name           String
   password       String
-  role           UserRole @default(customer)
+  role           UserRole @default(CUSTOMER)
   profilePicture String
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
@@ -37,8 +37,8 @@ model User {
 }
 
 enum UserRole {
-  customer
-  eventOrganizer
+  CUSTOMER
+  EVENTORGANIZER
 }
 
 model Referral {
@@ -61,7 +61,7 @@ model PointLot {
 
   user User @relation(fields: [userId], references: [id])
 
-  @@map("pointLots")
+  @@map("point_lots")
 }
 
 model Coupon {
@@ -85,7 +85,7 @@ model Notification {
   userId    Int
   title     String
   message   String   @db.Text
-  is_read   Boolean  @default(false)
+  isRead    Boolean  @default(false)
   createdAt DateTime @default(now())
 
   user User @relation(fields: [userId], references: [id])
@@ -98,17 +98,17 @@ model Transaction {
   userId          Int
   voucherId       Int?
   couponId        Int?
-  status          StatusTransaction @default(pending)
+  status          StatusTransaction @default(PENDING)
   subtotal        Int
   voucherDiscount Int               @default(0)
   couponDiscount  Int               @default(0)
   pointsDiscount  Int               @default(0)
-  total_amount    Int
+  totalAmount     Int
   paymentDeadline DateTime
-  admin_deadline  DateTime
+  adminDeadline   DateTime
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
-  payment_proof   String
+  paymentProof    String
 
   user             User              @relation(fields: [userId], references: [id])
   voucher          Voucher?          @relation(fields: [voucherId], references: [id])
@@ -120,10 +120,10 @@ model Transaction {
 }
 
 enum StatusTransaction {
-  pending // Pesanan tiket dibuat, menunggu pembayaran dari pembeli
-  paid // Pembayaran berhasil dan tiket sudah dikonfirmasi
-  cancelled // Transaksi dibatalkan, misalnya user membatalkan atau payment deadline lewat
-  refunded // Dana transaksi sudah dikembalikan
+  PENDING // Pesanan tiket dibuat, menunggu pembayaran dari pembeli
+  PAID // Pembayaran berhasil dan tiket sudah dikonfirmasi
+  CANCELLED // Transaksi dibatalkan, misalnya user membatalkan atau payment deadline lewat
+  REFUNDED // Dana transaksi sudah dikembalikan
 }
 
 model Category {
@@ -191,7 +191,7 @@ model TicketType {
   event            Event             @relation(fields: [eventId], references: [id])
   transactionItems TransactionItem[]
 
-  @@map("ticketTypes")
+  @@map("ticket_types")
 }
 
 model TransactionItem {
@@ -204,7 +204,7 @@ model TransactionItem {
   transaction Transaction @relation(fields: [transactionId], references: [id])
   ticketType  TicketType  @relation(fields: [ticketTypeId], references: [id])
 
-  @@map("transactionItems")
+  @@map("transaction_items")
 }
 
 model Attendance {
