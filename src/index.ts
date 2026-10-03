@@ -1,5 +1,6 @@
 import express from "express";
 import { globalError, notFoundError } from "./utils/errors.js";
+import { authRoutes } from "./routes/user.auth.route.js";
 
 const PORT = 8000;
 
@@ -10,6 +11,7 @@ app.use(express.json());
 app.get("/api", (req, res) => res.status(200).send("Welcome to my API"));
 
 // entrypoint
+app.use("/auth", authRoutes)
 
 
 // errors
