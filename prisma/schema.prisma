@@ -18,11 +18,11 @@ model User {
   name           String
   password       String
   role           UserRole @default(CUSTOMER)
-  profilePicture String
+  profilePicture String?   
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   referralCode   String   @unique
-  points         Int
+  points         Int      @default(0)
 
   referrals     Referral[]
   pointLots     PointLot[]
