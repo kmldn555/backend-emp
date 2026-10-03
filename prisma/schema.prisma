@@ -17,7 +17,7 @@ model User {
   email          String   @unique
   name           String
   password       String
-  role           UserRole @default(CUSTOMER)
+  role           UserRole 
   profilePicture String?   
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
