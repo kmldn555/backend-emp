@@ -4,7 +4,7 @@ import { ApiError } from "../utils/api-error.js";
 import argon from "argon2";
 
 export const registerService = async (
-  body: Pick<User, "name" | "email" | "password" | "role" | "referralCode">,
+  body: Pick<User, "name" | "email" | "password" | "role" | "referralCode">, // bisa diganti validator
 ) => {
   // 1. Protect the password
   const hashedPassword = await argon.hash(body.password);
