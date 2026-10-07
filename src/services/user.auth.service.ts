@@ -59,6 +59,11 @@ export const registerService = async (
         },
       });
     }
+
+    // 5. generate point untuk refererr.id (user yang digunakan referralnya)
+    // 6. generate coupon untuk user 
+
+
   });
 
   // 5. send result
