@@ -2,10 +2,9 @@ import { User } from "../generated/prisma/client.js";
 import { prisma } from "../lib/prisma.js";
 import { ApiError } from "../utils/api-error.js";
 import argon from "argon2";
+import { LoginUserSchema, RegisterUserSchema } from "../validators/user.auth.validator.js";
 
-export const registerService = async (
-  body: Pick<User, "name" | "email" | "password" | "role" | "referralCode">, // bisa diganti validator
-) => {
+export const registerService = async (body: RegisterUserSchema) => {
   // 1. Protect the password
   const hashedPassword = await argon.hash(body.password);
 
@@ -61,11 +60,18 @@ export const registerService = async (
     }
 
     // 5. generate point untuk refererr.id (user yang digunakan referralnya)
-    // 6. generate coupon untuk user 
-
-
+    // 6. generate coupon untuk user
   });
 
   // 5. send result
   return { message: "register success" };
 };
+
+export const loginService = async (body: LoginUserSchema) => {
+  // 1. cek dulu emailnya udah ada di db atau tidak
+  // 2. kalo emailnya tidak ada di db, throw error
+  // 3. cek passwordnya, bener atau tidak
+  // 4. kalo passwordnya salah, throw error
+  // 5. generate accessToken (jwt)
+  // 6. return message login success + data user + access tokennya
+  };
