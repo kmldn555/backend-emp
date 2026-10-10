@@ -15,10 +15,13 @@
   "dependencies": {
     "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
+    "@types/multer": "^2.3.0",
     "argon2": "^0.45.1",
+    "cloudinary": "^2.11.0",
     "cors": "^2.8.6",
     "dotenv": "^18.0.4",
     "express": "^5.2.1",
+    "multer": "^2.4.0",
     "pg": "^8.23.0",
     "zod": "^4.6.5"
   },
