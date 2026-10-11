@@ -9,6 +9,22 @@ export class EventService {
   ) {
     console.log("Data DTO diterima:", data);
     console.log("Organizer ID: ", organizerId);
+    // 1. VALIDASI: Cek apakah startDate di masa lalu (sebelum waktu sekarang)
+    const startDate = new Date(data.startDate);
+    const currentDate = new Date();
+
+    if (startDate < currentDate) {
+      throw new Error(
+        "Tanggal mulai event tidak boleh sebelum tanggal/waktu sekarang.",
+      );
+    }
+
+    // (Opsional) Validasi tambahan: pastikan endDate setelah startDate
+    const endDate = new Date(data.endDate);
+    if (endDate <= startDate) {
+      throw new Error("Tanggal selesai event harus setelah tanggal mulai.");
+    }
+
     const totalSeat = data.tickets.reduce(
       (acc, curr) => acc + Number(curr.totalSeat),
       0,
@@ -45,6 +61,16 @@ export class EventService {
 
         // 3. Create Voucher Promotion (if defined)
         if (data.voucher && data.voucher.code) {
+          const existingVoucher = await tx.voucher.findUnique({
+            where: { code: data.voucher.code },
+          });
+
+          if (existingVoucher) {
+            throw new Error(
+              `Voucher dengan kode "${data.voucher.code}" sudah digunakan. Silakan gunakan kode lain.`,
+            );
+          }
+
           await tx.voucher.create({
             data: {
               eventId: event.id,
