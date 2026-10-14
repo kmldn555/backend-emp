@@ -4,6 +4,7 @@ import {
   forgotPasswordController,
   loginController,
   registerController,
+  resetPasswordController,
 } from "../controllers/user.auth.controller.js";
 import { validate } from "../middleware/validation.middleware.js";
 import {
@@ -11,6 +12,7 @@ import {
   forgotPasswordSchema,
   loginUserSchema,
   registerUserSchema,
+  resetPasswordSchema,
 } from "../validators/user.auth.validator.js";
 import { verifyToken } from "../middleware/auth.middleware.js";
 
@@ -22,6 +24,12 @@ authRoutes.post(
   "/forgot-password",
   validate(forgotPasswordSchema),
   forgotPasswordController,
+);
+authRoutes.post(
+  "/reset-password",
+  verifyToken(process.env.JWT_SECRET_RESET!),
+  validate(resetPasswordSchema),
+  resetPasswordController,
 );
 authRoutes.post(
   "/change-password",
