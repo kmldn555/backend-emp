@@ -7,6 +7,7 @@ import {
   ForgotPasswordSchema,
   LoginUserSchema,
   RegisterUserSchema,
+  ResetPasswordSchema,
 } from "../validators/user.auth.validator.js";
 import { randomBytes } from "node:crypto";
 import { sendMail } from "../lib/mail.js";
@@ -35,7 +36,7 @@ export const registerService = async (body: RegisterUserSchema) => {
         throw new ApiError("Email already used", 400);
       }
 
-      // 2, cek referral code
+      // 2. cek referral code
       let referrer = undefined;
 
       if (body.referralCode) {
@@ -71,7 +72,7 @@ export const registerService = async (body: RegisterUserSchema) => {
         });
       }
 
-      // 5. generate point untuk refererr.id (user yang digunakan referralnya)
+      // 5. Generate point untuk refererr.id (user yang digunakan referralnya)
       if (referrer) {
         const creditedAt = new Date();
 
@@ -121,7 +122,7 @@ export const registerService = async (body: RegisterUserSchema) => {
     },
   });
 
-  // 6. send result
+  // 6. Send result
   return { message: "register success" };
 };
 
@@ -195,6 +196,27 @@ export const forgotPasswordService = async (body: ForgotPasswordSchema) => {
   });
 
   return { message: "Send email Success" };
+};
+
+export const resetPasswordService = async (
+  body: ResetPasswordSchema,
+  userId: number,
+) => {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+  });
+
+  if (!user) {
+    throw new ApiError("User not found", 404);
+  }
+
+  const hashedPassword = await argon.hash(body.password);
+
+  await prisma.user.update({
+    where: { id: userId },
+    data: { password: hashedPassword },
+  });
+  return { message: "Reset password success" };
 };
 
 export const changePasswordService = async (
