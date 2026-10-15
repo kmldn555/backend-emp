@@ -43,7 +43,7 @@ export type ForgotPasswordSchema = z.infer<typeof forgotPasswordSchema>;
 
 // schema change password
 export const changePasswordSchema = z.object({
-  oldPassword: z.string().min(1),
+  currentPassword: z.string().min(1),
   newPassword: z
     .string()
     .min(6, { error: "Password must be at least 6 character" })
