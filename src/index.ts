@@ -3,6 +3,7 @@ import { globalError, notFoundError } from "./utils/errors.js";
 import { authRoutes } from "./routes/user.auth.route.js";
 import cors from "cors";
 import { eventRoutes } from "./routes/event.routes.js";
+import { profileRoutes } from "./routes/user.profile.route.js";
 
 const PORT = 8000;
 
@@ -16,6 +17,7 @@ app.get("/api", (req, res) => res.status(200).send("Welcome to my API"));
 // entrypoint
 app.use("/auth", authRoutes)
 app.use("/events", eventRoutes)
+app.use("/profile", profileRoutes);
 
 
 // errors

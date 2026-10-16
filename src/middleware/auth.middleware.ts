@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 import { ApiError } from "../utils/api-error.js";
+import { UserRole } from "../generated/prisma/enums.js";
 
 export const verifyToken = (secretKey: string) => {
   return (req: Request, res: Response, next: NextFunction) => {
@@ -21,5 +22,17 @@ export const verifyToken = (secretKey: string) => {
 
       return next(new ApiError("Token invalid", 401));
     }
+  };
+};
+// middleware buat atur untuk masuk beberapa endpoint berdasarkan role
+export const verifyRole = (roles: UserRole[]) => {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const userRole = res.locals.user.role;
+
+    if (!userRole || !roles.includes(userRole)) {
+      throw new ApiError("You do not have acces", 403);
+    }
+
+    next();
   };
 };

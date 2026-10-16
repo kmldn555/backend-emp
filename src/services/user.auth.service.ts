@@ -112,7 +112,7 @@ export const registerService = async (body: RegisterUserSchema) => {
     },
   );
 
-  // 5. Kirim email welcoming (perbaikannya tidak perlu diawait)
+  // 7. Kirim email welcoming (perbaikannya tidak perlu diawait)
   sendMail({
     to: body.email,
     subject: "Welcome to APPTIX",
@@ -230,10 +230,10 @@ export const changePasswordService = async (
     throw new ApiError("user not found", 400);
   }
 
-  const isPassMatch = await argon.verify(user.password, body.oldPassword);
+  const isPassMatch = await argon.verify(user.password, body.currentPassword);
 
   if (!isPassMatch) {
-    throw new ApiError("Password do not match", 400);
+    throw new ApiError("Incorrect password. Please try again", 400);
   }
 
   const newPassword = await argon.hash(body.newPassword);
