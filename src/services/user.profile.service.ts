@@ -2,7 +2,6 @@ import { prisma } from "../lib/prisma.js";
 import { uploadImage, removeImageByUrl } from "../lib/cloudinary.js";
 import { ApiError } from "../utils/api-error.js";
 
-export const getProfile = async () => {};
 export const updateProfilePictureService = async (
   userId: number,
   file: Express.Multer.File,
@@ -46,6 +45,48 @@ export const updateProfilePictureService = async (
   // 5. Kembalikan data user terbaru
   return {
     message: "Profile picture updated successfully",
+    user: updatedUser,
+  };
+};
+
+export const updateNameService = async (
+  userId: number,
+  name: string,
+) => {
+  // 1. Pastikan user tersedia
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+  });
+
+  if (!user) {
+    throw new ApiError("User not found", 404);
+  }
+
+  // 2. Validasi nama
+  const trimmedName = name.trim();
+
+  if (!trimmedName) {
+    throw new ApiError("Name cannot be empty", 400);
+  }
+
+  // 3. Update nama di database
+  const updatedUser = await prisma.user.update({
+    where: { id: userId },
+    data: {
+      name: trimmedName,
+    },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      role: true,
+      profilePicture: true,
+    },
+  });
+
+  // 4. Return data user terbaru
+  return {
+    message: "Name updated successfully",
     user: updatedUser,
   };
 };
