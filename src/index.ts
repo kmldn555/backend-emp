@@ -4,6 +4,7 @@ import { authRoutes } from "./routes/user.auth.route.js";
 import cors from "cors";
 import { eventRoutes } from "./routes/event.routes.js";
 import { profileRoutes } from "./routes/user.profile.route.js";
+import { transactionRoutes } from "./routes/transaction.routes.js";
 
 const PORT = 8000;
 
@@ -18,6 +19,7 @@ app.get("/api", (req, res) => res.status(200).send("Welcome to my API"));
 app.use("/auth", authRoutes)
 app.use("/events", eventRoutes)
 app.use("/profile", profileRoutes);
+app.use("/transactions", transactionRoutes);
 
 
 // errors
