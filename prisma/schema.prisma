@@ -39,6 +39,7 @@ model User {
 enum UserRole {
   CUSTOMER
   EVENTORGANIZER
+  ADMIN
 }
 
 model Referral {
