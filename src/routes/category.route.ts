@@ -28,4 +28,4 @@ categoryRoutes.patch(
 
 categoryRoutes.delete("/:id", deleteCategoryController);
 
-export default categoryRoutes;
+export { categoryRoutes };

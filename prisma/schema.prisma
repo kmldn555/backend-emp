@@ -99,17 +99,17 @@ model Transaction {
   userId          Int
   voucherId       Int?
   couponId        Int?
-  status          StatusTransaction @default(PENDING)
+  status          StatusTransaction @default(WAITING_FOR_PAYMENT)
   subtotal        Int
   voucherDiscount Int               @default(0)
   couponDiscount  Int               @default(0)
   pointsDiscount  Int               @default(0)
   totalAmount     Int
   paymentDeadline DateTime
-  adminDeadline   DateTime
   createdAt       DateTime          @default(now())
   updatedAt       DateTime          @updatedAt
-  paymentProof    String
+  paymentProof    String?
+  adminDeadline   DateTime?
 
   user             User              @relation(fields: [userId], references: [id])
   voucher          Voucher?          @relation(fields: [voucherId], references: [id])
@@ -121,10 +121,12 @@ model Transaction {
 }
 
 enum StatusTransaction {
-  PENDING // Pesanan tiket dibuat, menunggu pembayaran dari pembeli
-  PAID // Pembayaran berhasil dan tiket sudah dikonfirmasi
-  CANCELLED // Transaksi dibatalkan, misalnya user membatalkan atau payment deadline lewat
-  REFUNDED // Dana transaksi sudah dikembalikan
+  WAITING_FOR_PAYMENT // 2-hour countdown to upload payment proof
+  WAITING_FOR_ADMIN_CONFIRMATION // Proof uploaded; 3-day window for organizer
+  DONE // Approved by organizer
+  REJECTED // Rejected by organizer (triggers rollback)
+  EXPIRED // No payment proof within 2 hours (triggers rollback)
+  CANCELED // No organizer action within 3 days (triggers rollback)
 }
 
 model Category {

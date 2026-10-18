@@ -4,7 +4,9 @@ import { authRoutes } from "./routes/user.auth.route.js";
 import cors from "cors";
 import { eventRoutes } from "./routes/event.routes.js";
 import { profileRoutes } from "./routes/user.profile.route.js";
-import categoryRoutes from "./routes/category.route.js";
+
+import { transactionRoutes } from "./routes/transaction.routes.js";
+import {categoryRoutes} from "./routes/category.route.js";
 
 const PORT = 8000;
 
@@ -20,6 +22,8 @@ app.use("/auth", authRoutes)
 app.use("/events", eventRoutes)
 app.use("/profile", profileRoutes);
 app.use("/categories", categoryRoutes)
+app.use("/transactions", transactionRoutes);
+
 
 // errors
 app.use(globalError);
