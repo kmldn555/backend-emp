@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { uploadToCloudinary } from '../config/cloudinary.js';
 import { createEventService, findEventByIdService, findEventsService } from '../services/event.service.js';
 
+//controller create event
 export const createEventController = async (req: Request, res: Response) => {
   try {
     const organizerId = (req as any).user?.id || 1; // Fallback jika auth belum terpasang
@@ -42,6 +43,7 @@ export const createEventController = async (req: Request, res: Response) => {
   }
 };
 
+//controller get semua event
 export const getEventsController = async (req: Request, res: Response) => {
   try {
     const { search, categoryId, location, page, limit } = req.query;
@@ -60,6 +62,7 @@ export const getEventsController = async (req: Request, res: Response) => {
   }
 };
 
+//controller get spesifik event
 export const getEventByIdController = async (req: Request, res: Response) => {
   try {
     const eventId = Number(req.params.id);

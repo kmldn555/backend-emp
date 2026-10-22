@@ -498,3 +498,31 @@ export const sweepOverdueTransactions = async () => {
     canceledCount: canceledList.length,
   };
 };
+
+export const getCustomerTransactions = async (userId: number) => {
+  // 1. Find any transactions for this user that might have crossed their 2h or 3d deadline
+  const pendingTransactions = await prisma.transaction.findMany({
+    where: {
+      userId,
+      status: {
+        in: [
+          StatusTransaction.WAITING_FOR_PAYMENT,
+          StatusTransaction.WAITING_FOR_ADMIN_CONFIRMATION,
+        ],
+      },
+    },
+    select: { id: true },
+  });
+
+  // 2. Run deadline & rollback checks on each active transaction
+  await Promise.all(
+    pendingTransactions.map((trx) => evaluateAndSyncTransactionStatus(trx.id))
+  );
+
+  // 3. Return the full, freshly synced transaction history sorted newest first
+  return await prisma.transaction.findMany({
+    where: { userId },
+    include: transactionDetailInclude,
+    orderBy: { createdAt: "desc" },
+  });
+};
