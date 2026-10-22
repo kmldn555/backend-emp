@@ -23,24 +23,45 @@ const generateSignature = (params: Record<string, string | number>): string => {
 
 /**
  * Upload image using SIGNED request
+ * Mendukung pemanggilan:
+ * 1. uploadImage(req.file) -> untuk kode Dev 2
+ * 2. uploadImage(req.file.buffer, "events") -> untuk event.controller.ts & transaction.controller.ts
  */
-export const uploadImage = async (file: Express.Multer.File) => {
+export const uploadImage = async (
+  fileOrBuffer: Express.Multer.File | Buffer,
+  folder?: string,
+): Promise<string> => {
   const timestamp = Math.floor(Date.now() / 1000);
 
-  const signature = generateSignature({
-    timestamp,
-  });
+  // Jika parameter folder dikirim, wajib dimasukkan ke dalam signature Cloudinary
+  const signatureParams: Record<string, string | number> = { timestamp };
+  if (folder) {
+    signatureParams.folder = folder;
+  }
 
+  const signature = generateSignature(signatureParams);
   const formData = new FormData();
 
-  formData.append("file", file.buffer, {
-    filename: file.originalname,
-    contentType: file.mimetype,
-  });
+  // Cek apakah input berupa Buffer langsung atau objek Express.Multer.File
+  if (Buffer.isBuffer(fileOrBuffer)) {
+    formData.append("file", fileOrBuffer, {
+      filename: `upload-${timestamp}.jpg`,
+      contentType: "image/jpeg",
+    });
+  } else {
+    formData.append("file", fileOrBuffer.buffer, {
+      filename: fileOrBuffer.originalname,
+      contentType: fileOrBuffer.mimetype,
+    });
+  }
 
   formData.append("api_key", apiKey);
   formData.append("timestamp", timestamp.toString());
   formData.append("signature", signature);
+
+  if (folder) {
+    formData.append("folder", folder);
+  }
 
   const response = await axios.post(
     `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
@@ -50,8 +71,15 @@ export const uploadImage = async (file: Express.Multer.File) => {
     },
   );
 
-  return response.data;
+  // Kembalikan string URL gambar agar sesuai dengan kolom String di Prisma
+  return response.data.secure_url;
 };
+
+/**
+ * Alias agar jika ada file lain (seperti transaction.controller.ts)
+ * yang mengimpor uploadToCloudinary tetap berjalan tanpa error
+ */
+export const uploadToCloudinary = uploadImage;
 
 /**
  * Extract public_id from secure_url
@@ -59,10 +87,8 @@ export const uploadImage = async (file: Express.Multer.File) => {
 const extractPublicIdFromUrl = (url: string): string => {
   const withoutQuery = url.split("?")[0];
   const parts = withoutQuery.split("/");
-
   const uploadIndex = parts.findIndex((part) => part === "upload");
   const publicIdParts = parts.slice(uploadIndex + 2);
-
   return publicIdParts.join("/").replace(/\.[^/.]+$/, "");
 };
 
@@ -79,7 +105,6 @@ export const removeImageByUrl = async (secureUrl: string) => {
   });
 
   const formData = new FormData();
-
   formData.append("public_id", publicId);
   formData.append("api_key", apiKey);
   formData.append("timestamp", timestamp.toString());

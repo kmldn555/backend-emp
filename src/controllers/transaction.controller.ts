@@ -3,10 +3,11 @@ import { Request, Response } from "express";
 import {
   createTransaction,
   evaluateAndSyncTransactionStatus,
+  getCustomerTransactions,
   submitPaymentProof,
 } from "../services/transaction.service.js";
-import { uploadToCloudinary } from "../config/cloudinary.js";
 import { prisma } from "../lib/prisma.js";
+import { uploadImage } from "../lib/cloudinary.js";
 
 // Helper function to safely extract the logged-in user's ID from Developer 2's verifyToken middleware
 const getAuthenticatedUserId = (req: Request, res: Response): number => {
@@ -103,7 +104,7 @@ export const handleUploadPaymentProof = async (req: Request, res: Response) => {
     }
 
     // 3. Upload image buffer to Cloudinary
-    const paymentProofUrl = await uploadToCloudinary(
+    const paymentProofUrl = await uploadImage(
       req.file.buffer,
       "payment-proofs"
     );
@@ -148,5 +149,29 @@ export const handleGetCustomerWallet = async (req: Request, res: Response) => {
     return res.status(200).json({ success: true, data: user });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /transactions — Fetch all transactions for the logged-in customer
+export const handleGetCustomerTransactions = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    // 1. Extract the logged-in customer ID from res.locals.user / req.user
+    const userId = getAuthenticatedUserId(req, res);
+
+    // 2. Fetch synced transaction history from the service
+    const transactions = await getCustomerTransactions(userId);
+
+    return res.status(200).json({
+      success: true,
+      data: transactions,
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to fetch transaction history.",
+    });
   }
 };

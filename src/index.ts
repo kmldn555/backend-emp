@@ -7,6 +7,7 @@ import { profileRoutes } from "./routes/user.profile.route.js";
 
 import { transactionRoutes } from "./routes/transaction.routes.js";
 import {categoryRoutes} from "./routes/category.route.js";
+import { reviewRoutes } from "./routes/review.routes.js";
 
 const PORT = 8000;
 
@@ -23,6 +24,8 @@ app.use("/events", eventRoutes)
 app.use("/profile", profileRoutes);
 app.use("/categories", categoryRoutes)
 app.use("/transactions", transactionRoutes);
+// app.use("/reviews", reviewRoutes);
+// app.use("/organizers", reviewRoutes)
 
 
 // errors

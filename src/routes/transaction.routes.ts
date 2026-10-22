@@ -8,11 +8,12 @@ import {
   handleGetTransactionById,
   handleUploadPaymentProof,
   handleGetCustomerWallet,
+  handleGetCustomerTransactions,
 } from "../controllers/transaction.controller.js";
 
 const transactionRoutes = express.Router();
 
-// 1. GET /api/transactions/wallet — MUST be placed BEFORE /:id
+// 1. GET /api/transactions/wallet
 transactionRoutes.get(
   "/wallet",
   verifyToken(process.env.JWT_SECRET!),
@@ -28,7 +29,7 @@ transactionRoutes.post(
   handleCreateTransaction,
 );
 
-// 3. GET /api/transactions/:id — Fetch transaction details & 2-hour countdown
+// 3. GET /api/transactions/:id —
 transactionRoutes.get(
   "/:id",
   verifyToken(process.env.JWT_SECRET!),
@@ -42,6 +43,14 @@ transactionRoutes.patch(
   verifyRole([UserRole.CUSTOMER]),
   upload(5).single("paymentProof"),
   handleUploadPaymentProof,
+);
+
+
+transactionRoutes.get(
+  "/",
+  verifyToken(process.env.JWT_SECRET!),
+  verifyRole([UserRole.CUSTOMER]),
+  handleGetCustomerTransactions,
 );
 
 export { transactionRoutes };
