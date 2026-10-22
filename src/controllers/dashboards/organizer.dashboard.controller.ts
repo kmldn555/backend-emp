@@ -7,7 +7,6 @@ import {
 import { ApiError } from "../../utils/api-error.js";
 import { uploadImage } from "../../lib/cloudinary.js";
 
-
 export const findMyEventsController = async (req: Request, res: Response) => {
   const organizerId = res.locals.user.id;
   const result = await findMyEventsService(organizerId);
@@ -26,8 +25,7 @@ export const updateEventController = async (req: Request, res: Response) => {
   let thumbnail: string | undefined;
 
   if (req.file) {
-    const uploadedImage = await uploadImage(req.file);
-    thumbnail = uploadedImage.secure_url;
+    thumbnail = await uploadImage(req.file);
   }
 
   const result = await updateEventService(eventId, organizerId, {

@@ -1,5 +1,4 @@
 import { Request, Response } from "express";
-
 import {
   createEventService,
   findEventByIdService,
@@ -7,6 +6,7 @@ import {
 } from "../services/event.service.js";
 import { uploadImage } from "../lib/cloudinary.js";
 
+// Controller create event
 export const createEventController = async (req: Request, res: Response) => {
   try {
     const organizerId = res.locals.user.id;
@@ -25,9 +25,8 @@ export const createEventController = async (req: Request, res: Response) => {
         ? JSON.parse(req.body.data)
         : req.body.data;
 
-    // Upload buffer ke Cloudinary
-    const uploadedImage = await uploadImage(req.file);
-    const thumbnailUrl = uploadedImage.secure_url;
+    // Upload image ke Cloudinary
+    const thumbnailUrl = await uploadImage(req.file);
 
     // Panggil fungsi service secara langsung
     const createdEvent = await createEventService(
@@ -50,6 +49,7 @@ export const createEventController = async (req: Request, res: Response) => {
   }
 };
 
+// Controller get semua event
 export const getEventsController = async (req: Request, res: Response) => {
   try {
     const { search, categoryId, location, page, limit } = req.query;
@@ -70,6 +70,7 @@ export const getEventsController = async (req: Request, res: Response) => {
   }
 };
 
+// Controller get spesifik event
 export const getEventByIdController = async (req: Request, res: Response) => {
   try {
     const eventId = Number(req.params.id);

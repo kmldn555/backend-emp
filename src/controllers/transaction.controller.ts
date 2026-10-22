@@ -3,9 +3,9 @@ import { Request, Response } from "express";
 import {
   createTransaction,
   evaluateAndSyncTransactionStatus,
+  getCustomerTransactions,
   submitPaymentProof,
 } from "../services/transaction.service.js";
-
 import { prisma } from "../lib/prisma.js";
 import { uploadImage } from "../lib/cloudinary.js";
 
@@ -13,7 +13,9 @@ import { uploadImage } from "../lib/cloudinary.js";
 const getAuthenticatedUserId = (req: Request, res: Response): number => {
   // Developer 2's verifyToken sets `res.locals.user = payload`
   const rawId =
-    res.locals.user?.id ?? res.locals.user?.userId ?? (req as any).user?.id;
+    res.locals.user?.id ??
+    res.locals.user?.userId ??
+    (req as any).user?.id;
 
   const userId = Number(rawId);
   if (!rawId || isNaN(userId)) {
@@ -41,8 +43,7 @@ export const handleCreateTransaction = async (req: Request, res: Response) => {
 
     return res.status(201).json({
       success: true,
-      message:
-        "Transaction created. Please upload payment proof within 2 hours.",
+      message: "Transaction created. Please upload payment proof within 2 hours.",
       data: transaction,
     });
   } catch (error: any) {
@@ -103,14 +104,16 @@ export const handleUploadPaymentProof = async (req: Request, res: Response) => {
     }
 
     // 3. Upload image buffer to Cloudinary
-    const uploadedImage = await uploadImage(req.file);
-    const paymentProofUrl = uploadedImage.secure_url;
+    const paymentProofUrl = await uploadImage(
+      req.file.buffer,
+      "payment-proofs"
+    );
 
     // 4. Save proof URL and update status to WAITING_FOR_ADMIN_CONFIRMATION
     const updated = await submitPaymentProof(
       transactionId,
       userId,
-      paymentProofUrl,
+      paymentProofUrl
     );
 
     return res.status(200).json({
@@ -146,5 +149,29 @@ export const handleGetCustomerWallet = async (req: Request, res: Response) => {
     return res.status(200).json({ success: true, data: user });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
+  }
+};
+
+// GET /transactions — Fetch all transactions for the logged-in customer
+export const handleGetCustomerTransactions = async (
+  req: Request,
+  res: Response
+) => {
+  try {
+    // 1. Extract the logged-in customer ID from res.locals.user / req.user
+    const userId = getAuthenticatedUserId(req, res);
+
+    // 2. Fetch synced transaction history from the service
+    const transactions = await getCustomerTransactions(userId);
+
+    return res.status(200).json({
+      success: true,
+      data: transactions,
+    });
+  } catch (error: any) {
+    return res.status(400).json({
+      success: false,
+      message: error.message || "Failed to fetch transaction history.",
+    });
   }
 };
