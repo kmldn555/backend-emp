@@ -1,49 +1,58 @@
-import { Request, Response } from 'express';
-import { uploadToCloudinary } from '../config/cloudinary.js';
-import { createEventService, findEventByIdService, findEventsService } from '../services/event.service.js';
+// src/controllers/event.controller.ts
+import { Request, Response } from "express";
+import {
+  createEventService,
+  findEventByIdService,
+  findEventsService,
+} from "../services/event.service.js";
+import { uploadImage } from "../lib/cloudinary.js";
 
-//controller create event
+// Controller create event
 export const createEventController = async (req: Request, res: Response) => {
   try {
-    const organizerId = (req as any).user?.id || 1; // Fallback jika auth belum terpasang
+    // Membaca dari res.locals.user (sesuai verifyToken di auth.middleware.ts)
+    const organizerId =
+      Number(res.locals.user?.id ?? (req as any).user?.id) || 1;
 
     if (!req.file) {
-      return res.status(400).json({ message: 'Thumbnail file is required.' });
+      return res.status(400).json({ message: "Thumbnail file is required." });
     }
 
     if (!req.body.data) {
-      return res.status(400).json({ message: 'Payload data is required.' });
+      return res.status(400).json({ message: "Payload data is required." });
     }
 
     // Parsing payload form-data yang dikirim sebagai JSON string
     const parsedPayload =
-      typeof req.body.data === 'string'
+      typeof req.body.data === "string"
         ? JSON.parse(req.body.data)
         : req.body.data;
 
-    // Upload buffer ke Cloudinary
-    const thumbnailUrl = await uploadToCloudinary(req.file.buffer, 'events');
+    // Upload ke Cloudinary (sekarang mendukung req.file.buffer dan nama folder 'events')
+    const thumbnailUrl = await uploadImage(req.file.buffer, "events");
 
     // Panggil fungsi service secara langsung
     const createdEvent = await createEventService(
       organizerId,
       parsedPayload,
-      thumbnailUrl
+      thumbnailUrl,
     );
 
     return res.status(201).json({
-      message: 'Event and tickets successfully created.',
+      message: "Event and tickets successfully created.",
       data: createdEvent,
     });
   } catch (error: any) {
-    if (error.code === 'P2002') {
-      return res.status(409).json({ message: 'Kode voucher sudah digunakan.' });
+    if (error.code === "P2002") {
+      return res.status(409).json({ message: "Kode voucher sudah digunakan." });
     }
-    return res.status(500).json({ message: error.message || 'Internal Server Error' });
+    return res
+      .status(500)
+      .json({ message: error.message || "Internal Server Error" });
   }
 };
 
-//controller get semua event
+// Controller get semua event
 export const getEventsController = async (req: Request, res: Response) => {
   try {
     const { search, categoryId, location, page, limit } = req.query;
@@ -58,26 +67,30 @@ export const getEventsController = async (req: Request, res: Response) => {
 
     return res.status(200).json(result);
   } catch (error: any) {
-    return res.status(500).json({ message: error.message || 'Internal Server Error' });
+    return res
+      .status(500)
+      .json({ message: error.message || "Internal Server Error" });
   }
 };
 
-//controller get spesifik event
+// Controller get spesifik event
 export const getEventByIdController = async (req: Request, res: Response) => {
   try {
     const eventId = Number(req.params.id);
     if (isNaN(eventId)) {
-      return res.status(400).json({ message: 'Invalid Event ID format.' });
+      return res.status(400).json({ message: "Invalid Event ID format." });
     }
 
     const event = await findEventByIdService(eventId);
 
     if (!event) {
-      return res.status(404).json({ message: 'Event not found.' });
+      return res.status(404).json({ message: "Event not found." });
     }
 
     return res.status(200).json({ data: event });
   } catch (error: any) {
-    return res.status(500).json({ message: error.message || 'Internal Server Error' });
+    return res
+      .status(500)
+      .json({ message: error.message || "Internal Server Error" });
   }
 };

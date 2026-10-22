@@ -6,8 +6,8 @@ import {
   getCustomerTransactions,
   submitPaymentProof,
 } from "../services/transaction.service.js";
-import { uploadToCloudinary } from "../config/cloudinary.js";
 import { prisma } from "../lib/prisma.js";
+import { uploadImage } from "../lib/cloudinary.js";
 
 // Helper function to safely extract the logged-in user's ID from Developer 2's verifyToken middleware
 const getAuthenticatedUserId = (req: Request, res: Response): number => {
@@ -104,7 +104,7 @@ export const handleUploadPaymentProof = async (req: Request, res: Response) => {
     }
 
     // 3. Upload image buffer to Cloudinary
-    const paymentProofUrl = await uploadToCloudinary(
+    const paymentProofUrl = await uploadImage(
       req.file.buffer,
       "payment-proofs"
     );
