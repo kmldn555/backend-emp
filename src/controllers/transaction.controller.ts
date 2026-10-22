@@ -5,16 +5,15 @@ import {
   evaluateAndSyncTransactionStatus,
   submitPaymentProof,
 } from "../services/transaction.service.js";
-import { uploadToCloudinary } from "../config/cloudinary.js";
+
 import { prisma } from "../lib/prisma.js";
+import { uploadImage } from "../lib/cloudinary.js";
 
 // Helper function to safely extract the logged-in user's ID from Developer 2's verifyToken middleware
 const getAuthenticatedUserId = (req: Request, res: Response): number => {
   // Developer 2's verifyToken sets `res.locals.user = payload`
   const rawId =
-    res.locals.user?.id ??
-    res.locals.user?.userId ??
-    (req as any).user?.id;
+    res.locals.user?.id ?? res.locals.user?.userId ?? (req as any).user?.id;
 
   const userId = Number(rawId);
   if (!rawId || isNaN(userId)) {
@@ -42,7 +41,8 @@ export const handleCreateTransaction = async (req: Request, res: Response) => {
 
     return res.status(201).json({
       success: true,
-      message: "Transaction created. Please upload payment proof within 2 hours.",
+      message:
+        "Transaction created. Please upload payment proof within 2 hours.",
       data: transaction,
     });
   } catch (error: any) {
@@ -103,16 +103,14 @@ export const handleUploadPaymentProof = async (req: Request, res: Response) => {
     }
 
     // 3. Upload image buffer to Cloudinary
-    const paymentProofUrl = await uploadToCloudinary(
-      req.file.buffer,
-      "payment-proofs"
-    );
+    const uploadedImage = await uploadImage(req.file);
+    const paymentProofUrl = uploadedImage.secure_url;
 
     // 4. Save proof URL and update status to WAITING_FOR_ADMIN_CONFIRMATION
     const updated = await submitPaymentProof(
       transactionId,
       userId,
-      paymentProofUrl
+      paymentProofUrl,
     );
 
     return res.status(200).json({

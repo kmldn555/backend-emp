@@ -1,11 +1,26 @@
-import { NextFunction, Request, Response } from "express";
-import { ZodError, ZodType } from "zod";
+import type { NextFunction, Request, Response } from "express";
+import { ZodError, type ZodType } from "zod";
 import { ApiError } from "../utils/api-error.js";
 
-export const validate = (schema: ZodType) => {
+type ValidationTarget = "body" | "params" | "query";
+
+export const validate = (
+  schema: ZodType,
+  target: ValidationTarget = "body",
+) => {
   return (req: Request, res: Response, next: NextFunction) => {
     try {
-      req.body = schema.parse(req.body);
+      const parsedData = schema.parse(req[target]);
+
+      if (target === "body") {
+        req.body = parsedData;
+      } else {
+        // Simpan hasil validasi agar tipe hasil Zod tetap terjaga
+        // dan bisa digunakan oleh controller.
+        res.locals[target === "params" ? "validatedParams" : "validatedQuery"] =
+          parsedData;
+      }
+
       next();
     } catch (error) {
       if (error instanceof ZodError) {
@@ -13,8 +28,10 @@ export const validate = (schema: ZodType) => {
           .map((issue) => `${issue.path.join(".")} : ${issue.message}`)
           .join(",");
 
-        throw new ApiError(message, 400);
+        next(new ApiError(message, 400));
+        return;
       }
+
       next(error);
     }
   };

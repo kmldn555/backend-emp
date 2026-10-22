@@ -6,7 +6,9 @@ import { eventRoutes } from "./routes/event.routes.js";
 import { profileRoutes } from "./routes/user.profile.route.js";
 
 import { transactionRoutes } from "./routes/transaction.routes.js";
-import {categoryRoutes} from "./routes/category.route.js";
+import { categoryRoutes } from "./routes/category.route.js";
+import { adminDashboardRoutes } from "./routes/dashboard/admin.dashboard.route.js";
+import { organizerDashboardRoutes } from "./routes/dashboard/organizer.dashboard.route.js";
 
 const PORT = 8000;
 
@@ -18,15 +20,18 @@ app.use(express.json());
 app.get("/api", (req, res) => res.status(200).send("Welcome to my API"));
 
 // entrypoint
-app.use("/auth", authRoutes)
-app.use("/events", eventRoutes)
+app.use("/auth", authRoutes);
+app.use("/events", eventRoutes);
 app.use("/profile", profileRoutes);
-app.use("/categories", categoryRoutes)
+app.use("/categories", categoryRoutes);
 app.use("/transactions", transactionRoutes);
 
+// entrypoint dashboard
+app.use("/admin", adminDashboardRoutes);
+app.use("/organizer", organizerDashboardRoutes)
 
 // errors
 app.use(globalError);
-app.use(notFoundError)
+app.use(notFoundError);
 
 app.listen(PORT, () => console.log(`Server running on port : ${PORT}`));
