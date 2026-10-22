@@ -22,7 +22,7 @@ export const updateProfilePictureService = async (
   const updatedUser = await prisma.user.update({
     where: { id: userId },
     data: {
-      profilePicture: uploadedImage.secure_url,
+      profilePicture: uploadedImage,
     },
     select: {
       id: true,

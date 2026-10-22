@@ -1,4 +1,3 @@
-// src/controllers/event.controller.ts
 import { Request, Response } from "express";
 import {
   createEventService,
@@ -10,9 +9,7 @@ import { uploadImage } from "../lib/cloudinary.js";
 // Controller create event
 export const createEventController = async (req: Request, res: Response) => {
   try {
-    // Membaca dari res.locals.user (sesuai verifyToken di auth.middleware.ts)
-    const organizerId =
-      Number(res.locals.user?.id ?? (req as any).user?.id) || 1;
+    const organizerId = res.locals.user.id;
 
     if (!req.file) {
       return res.status(400).json({ message: "Thumbnail file is required." });
@@ -28,8 +25,8 @@ export const createEventController = async (req: Request, res: Response) => {
         ? JSON.parse(req.body.data)
         : req.body.data;
 
-    // Upload ke Cloudinary (sekarang mendukung req.file.buffer dan nama folder 'events')
-    const thumbnailUrl = await uploadImage(req.file.buffer, "events");
+    // Upload image ke Cloudinary
+    const thumbnailUrl = await uploadImage(req.file);
 
     // Panggil fungsi service secara langsung
     const createdEvent = await createEventService(
