@@ -420,12 +420,17 @@ export const evaluateAndSyncTransactionStatus = async (transactionId: number) =>
 /**
  * Uploads payment proof within the 2-hour window and sets the 3-day admin deadline.
  */
+/**
+ * Uploads or re-uploads payment proof.
+ * Allowed when status is WAITING_FOR_PAYMENT (within 2 hours)
+ * OR WAITING_FOR_ADMIN_CONFIRMATION (before admin confirms/rejects and within 3 days).
+ */
 export const submitPaymentProof = async (
   transactionId: number,
   userId: number,
   paymentProofUrl: string
 ) => {
-  // First sync status to ensure the 2-hour deadline hasn't just passed
+  // 1. Sync deadlines first (marks EXPIRED if > 2h without proof, or CANCELED if > 3d without admin action)
   const currentTrx = await evaluateAndSyncTransactionStatus(transactionId);
 
   if (!currentTrx || currentTrx.userId !== userId) {
@@ -433,18 +438,30 @@ export const submitPaymentProof = async (
   }
 
   if (currentTrx.status === StatusTransaction.EXPIRED) {
-    throw new Error("Transaction has expired (passed 2-hour payment deadline).");
-  }
-
-  if (currentTrx.status !== StatusTransaction.WAITING_FOR_PAYMENT) {
     throw new Error(
-      `Cannot upload payment proof for status: ${currentTrx.status}`
+      "Transaction has expired (passed 2-hour payment deadline)."
     );
   }
 
-  // Set 3-day deadline for Organizer confirmation (3 * 24 * 60 * 60 * 1000 ms)
-  const adminDeadline = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  // 2. Allow upload if WAITING_FOR_PAYMENT or re-upload if WAITING_FOR_ADMIN_CONFIRMATION
+  const isInitialUpload =
+    currentTrx.status === StatusTransaction.WAITING_FOR_PAYMENT;
+  const isReuploadBeforeAdminConfirm =
+    currentTrx.status === StatusTransaction.WAITING_FOR_ADMIN_CONFIRMATION;
 
+  if (!isInitialUpload && !isReuploadBeforeAdminConfirm) {
+    throw new Error(
+      `Cannot upload or re-upload payment proof when transaction status is ${currentTrx.status}.`
+    );
+  }
+
+  // 3. Keep existing 3-day adminDeadline on re-upload, or set a new 3-day deadline on first upload
+  const adminDeadline =
+    isReuploadBeforeAdminConfirm && currentTrx.adminDeadline
+      ? currentTrx.adminDeadline
+      : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+
+  // 4. Update paymentProof URL and ensure status is WAITING_FOR_ADMIN_CONFIRMATION
   return await prisma.transaction.update({
     where: { id: transactionId },
     data: {
