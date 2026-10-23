@@ -1,4 +1,3 @@
-// backend/src/controllers/transaction.controller.ts
 import { Request, Response } from "express";
 import {
   createTransaction,

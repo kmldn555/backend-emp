@@ -9,6 +9,7 @@ import { transactionRoutes } from "./routes/transaction.routes.js";
 import { adminDashboardRoutes } from "./routes/dashboard/admin.dashboard.route.js";
 import { organizerDashboardRoutes } from "./routes/dashboard/organizer.dashboard.route.js";
 import {categoryRoutes} from "./routes/category.route.js";
+import { startTransactionCronJob } from "./jobs/transaction.cron.js";
 
 const PORT = 8000;
 
@@ -37,3 +38,5 @@ app.use(globalError);
 app.use(notFoundError);
 
 app.listen(PORT, () => console.log(`Server running on port : ${PORT}`));
+
+startTransactionCronJob()
