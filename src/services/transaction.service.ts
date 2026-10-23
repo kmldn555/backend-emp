@@ -1,4 +1,3 @@
-// backend/src/services/transaction.service.ts
 import { Prisma } from "../generated/prisma/client.js";
 import { StatusTransaction } from "../generated/prisma/enums.js";
 import { prisma } from "../lib/prisma.js";

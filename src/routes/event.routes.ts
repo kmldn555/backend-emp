@@ -1,4 +1,3 @@
-// src/routes/event.route.ts
 import { Router } from "express";
 import { verifyToken, verifyRole } from "../middleware/auth.middleware.js";
 import { upload } from "../middleware/upload.middleware.js";

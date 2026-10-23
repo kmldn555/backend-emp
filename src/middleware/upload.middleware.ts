@@ -1,4 +1,3 @@
-// src/middleware/upload.middleware.ts
 import multer from "multer";
 import { ApiError } from "../utils/api-error.js";
 
