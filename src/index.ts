@@ -27,8 +27,6 @@ app.use("/events", eventRoutes);
 app.use("/profile", profileRoutes);
 app.use("/categories", categoryRoutes);
 app.use("/transactions", transactionRoutes);
-// app.use("/reviews", reviewRoutes);
-// app.use("/organizers", reviewRoutes)
 
 // entrypoint dashboard
 app.use("/admin", adminDashboardRoutes);
