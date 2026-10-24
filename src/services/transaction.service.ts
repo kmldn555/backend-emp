@@ -19,19 +19,31 @@ export interface CreateTransactionInput {
 }
 
 // Reusable Prisma include object so all transaction queries return consistent nested data
-const transactionDetailInclude = {
+export const transactionDetailInclude = {
   transactionItems: {
     include: {
       ticketType: {
         include: {
-          event: true,
+          event: {
+            select: {
+              id: true,
+              name: true,
+              location: true,
+              startDate: true,
+              endDate: true,
+              thumbnail: true,
+            },
+          },
         },
       },
     },
   },
-  voucher: true,
-  coupon: true,
-} satisfies Prisma.TransactionInclude;
+  attendances: {
+    include: {
+      reviews: true,
+    },
+  },
+};
 
 /**
  * Pure helper function to compute final IDR total and capped point deduction.
@@ -42,12 +54,12 @@ export const calculatePricing = (
   voucherDiscount: number,
   couponDiscount: number,
   availableUserPoints: number,
-  usePoints: boolean
+  usePoints: boolean,
 ) => {
   // Calculate price after applying voucher and coupon discounts
   const priceAfterPromos = Math.max(
     0,
-    subtotal - voucherDiscount - couponDiscount
+    subtotal - voucherDiscount - couponDiscount,
   );
 
   // If customer opted to use points, cap pointsDiscount at the remaining price
@@ -69,7 +81,7 @@ export const calculatePricing = (
 export const rollbackTransactionResources = async (
   tx: Prisma.TransactionClient,
   transactionId: number,
-  targetStatus: "EXPIRED" | "CANCELED" | "REJECTED"
+  targetStatus: "EXPIRED" | "CANCELED" | "REJECTED",
 ) => {
   // 1. Fetch transaction with its items inside the transaction lock
   const trx = await tx.transaction.findUnique({
@@ -177,7 +189,8 @@ export const createTransaction = async (input: CreateTransactionInput) => {
 
   // Sanitize and filter valid positive ticket quantities
   const validItems = (items || []).filter(
-    (item) => Number.isInteger(Number(item.quantity)) && Number(item.quantity) > 0
+    (item) =>
+      Number.isInteger(Number(item.quantity)) && Number(item.quantity) > 0,
   );
 
   if (validItems.length === 0) {
@@ -210,7 +223,7 @@ export const createTransaction = async (input: CreateTransactionInput) => {
 
       if (ticket.availableSeat < quantity) {
         throw new Error(
-          `Not enough seats for ${ticket.name}. Remaining: ${ticket.availableSeat}`
+          `Not enough seats for ${ticket.name}. Remaining: ${ticket.availableSeat}`,
         );
       }
 
@@ -254,7 +267,7 @@ export const createTransaction = async (input: CreateTransactionInput) => {
         voucher.usedCount >= voucher.maxUsage
       ) {
         throw new Error(
-          "Voucher is invalid, expired, or has reached maximum usage."
+          "Voucher is invalid, expired, or has reached maximum usage.",
         );
       }
 
@@ -285,14 +298,14 @@ export const createTransaction = async (input: CreateTransactionInput) => {
         subtotal < coupon.minTransaction
       ) {
         throw new Error(
-          "Coupon is invalid, expired, or minimum transaction not met."
+          "Coupon is invalid, expired, or minimum transaction not met.",
         );
       }
 
       couponId = coupon.id;
       couponDiscount = Math.min(
         Math.max(0, subtotal - voucherDiscount),
-        coupon.discountValue
+        coupon.discountValue,
       );
 
       // Mark coupon as used
@@ -311,7 +324,7 @@ export const createTransaction = async (input: CreateTransactionInput) => {
       voucherDiscount,
       couponDiscount,
       user.points,
-      usePoints
+      usePoints,
     );
 
     // If points are used, deduct from User.points and FIFO from PointLot
@@ -382,7 +395,9 @@ export const createTransaction = async (input: CreateTransactionInput) => {
  * Checks a single transaction's deadlines and automatically transitions + rolls back
  * if overdue. Called lazily on GET requests and before payment proof upload.
  */
-export const evaluateAndSyncTransactionStatus = async (transactionId: number) => {
+export const evaluateAndSyncTransactionStatus = async (
+  transactionId: number,
+) => {
   const now = new Date();
 
   const trx = await prisma.transaction.findUnique({
@@ -398,7 +413,7 @@ export const evaluateAndSyncTransactionStatus = async (transactionId: number) =>
     now > trx.paymentDeadline
   ) {
     return await prisma.$transaction((tx) =>
-      rollbackTransactionResources(tx, trx.id, "EXPIRED")
+      rollbackTransactionResources(tx, trx.id, "EXPIRED"),
     );
   }
 
@@ -409,7 +424,7 @@ export const evaluateAndSyncTransactionStatus = async (transactionId: number) =>
     now > trx.adminDeadline
   ) {
     return await prisma.$transaction((tx) =>
-      rollbackTransactionResources(tx, trx.id, "CANCELED")
+      rollbackTransactionResources(tx, trx.id, "CANCELED"),
     );
   }
 
@@ -427,7 +442,7 @@ export const evaluateAndSyncTransactionStatus = async (transactionId: number) =>
 export const submitPaymentProof = async (
   transactionId: number,
   userId: number,
-  paymentProofUrl: string
+  paymentProofUrl: string,
 ) => {
   // 1. Sync deadlines first (marks EXPIRED if > 2h without proof, or CANCELED if > 3d without admin action)
   const currentTrx = await evaluateAndSyncTransactionStatus(transactionId);
@@ -438,7 +453,7 @@ export const submitPaymentProof = async (
 
   if (currentTrx.status === StatusTransaction.EXPIRED) {
     throw new Error(
-      "Transaction has expired (passed 2-hour payment deadline)."
+      "Transaction has expired (passed 2-hour payment deadline).",
     );
   }
 
@@ -450,7 +465,7 @@ export const submitPaymentProof = async (
 
   if (!isInitialUpload && !isReuploadBeforeAdminConfirm) {
     throw new Error(
-      `Cannot upload or re-upload payment proof when transaction status is ${currentTrx.status}.`
+      `Cannot upload or re-upload payment proof when transaction status is ${currentTrx.status}.`,
     );
   }
 
@@ -490,7 +505,7 @@ export const sweepOverdueTransactions = async () => {
 
   for (const item of expiredList) {
     await prisma.$transaction((tx) =>
-      rollbackTransactionResources(tx, item.id, "EXPIRED")
+      rollbackTransactionResources(tx, item.id, "EXPIRED"),
     );
   }
 
@@ -505,7 +520,7 @@ export const sweepOverdueTransactions = async () => {
 
   for (const item of canceledList) {
     await prisma.$transaction((tx) =>
-      rollbackTransactionResources(tx, item.id, "CANCELED")
+      rollbackTransactionResources(tx, item.id, "CANCELED"),
     );
   }
 
@@ -532,7 +547,7 @@ export const getCustomerTransactions = async (userId: number) => {
 
   // 2. Run deadline & rollback checks on each active transaction
   await Promise.all(
-    pendingTransactions.map((trx) => evaluateAndSyncTransactionStatus(trx.id))
+    pendingTransactions.map((trx) => evaluateAndSyncTransactionStatus(trx.id)),
   );
 
   // 3. Return the full, freshly synced transaction history sorted newest first
