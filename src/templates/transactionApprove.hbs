@@ -1,0 +1,252 @@
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
+    <style>
+      body {
+        margin: 0;
+        padding: 0;
+        background-color: #f4f6f9;
+        font-family: Arial, Helvetica, sans-serif;
+        color: #333333;
+      }
+
+      .email-container {
+        max-width: 600px;
+        margin: 30px auto;
+        background-color: #ffffff;
+        border-radius: 10px;
+        overflow: hidden;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.08);
+      }
+
+      .email-header {
+        background-color: #059669;
+        color: #ffffff;
+        padding: 30px 20px;
+        text-align: center;
+      }
+
+      .email-header h1 {
+        margin: 0;
+        font-size: 24px;
+      }
+
+      .email-header p {
+        margin: 10px 0 0;
+        font-size: 14px;
+      }
+
+      .email-body {
+        padding: 30px;
+      }
+
+      .success-badge {
+        display: inline-block;
+        background-color: #d1fae5;
+        color: #047857;
+        padding: 8px 14px;
+        border-radius: 20px;
+        font-size: 13px;
+        font-weight: bold;
+        margin-bottom: 20px;
+      }
+
+      .email-body h2 {
+        font-size: 20px;
+        margin: 0 0 15px;
+      }
+
+      .email-body p {
+        font-size: 14px;
+        line-height: 1.7;
+        margin: 10px 0;
+      }
+
+      .section-title {
+        font-size: 16px;
+        font-weight: bold;
+        margin: 25px 0 12px;
+      }
+
+      .ticket-table {
+        width: 100%;
+        border-collapse: collapse;
+        margin-top: 10px;
+      }
+
+      .ticket-table th,
+      .ticket-table td {
+        padding: 12px 8px;
+        border-bottom: 1px solid #e5e7eb;
+        text-align: left;
+        font-size: 13px;
+      }
+
+      .ticket-table th {
+        background-color: #f9fafb;
+        color: #4b5563;
+      }
+
+      .ticket-table td:last-child,
+      .ticket-table th:last-child {
+        text-align: right;
+      }
+
+      .total-section {
+        margin-top: 20px;
+        padding: 18px;
+        background-color: #f9fafb;
+        border-radius: 8px;
+      }
+
+      .total-row {
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        gap: 10px;
+      }
+
+      .total-label {
+        font-size: 14px;
+        font-weight: bold;
+      }
+
+      .total-amount {
+        color: #059669;
+        font-size: 20px;
+        font-weight: bold;
+        text-align: right;
+      }
+
+      .transaction-info {
+        margin-top: 25px;
+        padding: 15px;
+        border: 1px solid #e5e7eb;
+        border-radius: 8px;
+      }
+
+      .transaction-info p {
+        margin: 8px 0;
+        font-size: 13px;
+      }
+
+      .email-footer {
+        padding: 20px;
+        background-color: #f9fafb;
+        text-align: center;
+        color: #6b7280;
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      @media screen and (max-width: 600px) {
+        .email-container {
+          margin: 10px;
+        }
+
+        .email-body {
+          padding: 20px;
+        }
+
+        .ticket-table th,
+        .ticket-table td {
+          padding: 10px 5px;
+          font-size: 12px;
+        }
+      }
+    </style>
+  </head>
+
+  <body>
+    <div class="email-container">
+      <div class="email-header">
+        <h1>Payment Successfully Approved!</h1>
+        <p>Your event booking is confirmed</p>
+      </div>
+
+      <div class="email-body">
+        <span class="success-badge">TRANSACTION APPROVED</span>
+
+        <h2>Hello, {{customerName}}!</h2>
+
+        <p>
+          Good news! Your payment for
+          <strong>{{eventName}}</strong>
+          has been successfully approved by our administrator.
+        </p>
+
+        <p>
+          Below are the details of your tickets and transaction. Please keep
+          this email for your records.
+        </p>
+
+        <div class="section-title">Ticket Details</div>
+
+        <table class="ticket-table">
+          <thead>
+            <tr>
+              <th>Ticket Type</th>
+              <th>Quantity</th>
+              <th>Ticket Price</th>
+            </tr>
+          </thead>
+
+          <tbody>
+            {{#each ticketRows}}
+              <tr>
+                <td>{{ticketName}}</td>
+                <td>{{quantity}}</td>
+                <td>{{price}}</td>
+              </tr>
+            {{/each}}
+          </tbody>
+        </table>
+
+        <div class="total-section">
+          <div class="total-row">
+            <span class="total-label">Total Payment</span>
+            <span class="total-amount">{{totalAmount}}</span>
+          </div>
+        </div>
+
+        <div class="transaction-info">
+          <p>
+            <strong>Transaction ID:</strong>
+            #{{transactionId}}
+          </p>
+
+          <p>
+            <strong>Email:</strong>
+            {{customerEmail}}
+          </p>
+
+          <p>
+            <strong>Status:</strong>
+            <span style="color: #059669; font-weight: bold;">
+              {{status}}
+            </span>
+          </p>
+        </div>
+
+        <p style="margin-top: 25px;">
+          Thank you for your booking. We look forward to seeing you at
+          <strong>{{eventName}}</strong>!
+        </p>
+
+        <p>
+          If you have any questions, please contact our support team.
+        </p>
+      </div>
+
+      <div class="email-footer">
+        <p>
+          This is an automated email. Please do not reply directly to this
+          message.
+        </p>
+        <p>&copy; Event Platform. All rights reserved.</p>
+      </div>
+    </div>
+  </body>
+</html>
