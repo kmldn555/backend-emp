@@ -1,8 +1,8 @@
-// backend/src/controllers/transaction.controller.ts
 import { Request, Response } from "express";
 import {
   createTransaction,
   evaluateAndSyncTransactionStatus,
+  getActivePointsBalance,
   getCustomerTransactions,
   submitPaymentProof,
 } from "../services/transaction.service.js";
@@ -132,21 +132,37 @@ export const handleUploadPaymentProof = async (req: Request, res: Response) => {
 // GET /api/transactions/wallet — Fetch customer's points & active coupons for checkout
 export const handleGetCustomerWallet = async (req: Request, res: Response) => {
   try {
-    // 1. Get authenticated customer ID from res.locals.user
     const userId = getAuthenticatedUserId(req, res);
+    const now = new Date();
 
-    // 2. Query User points and unused, non-expired coupons
+    // 1. Ketentuan n: Hitung total poin aktif dari tabel point_lots dengan prisma.pointLot.aggregate
+    const aggregatedPoints = await getActivePointsBalance(prisma, userId);
+
+    // 2. Ketentuan b & g: Ambil kupon milik user yang sama, isUsed = false, dan belum expired
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
-        points: true,
+        id: true,
+        role: true,
         coupons: {
-          where: { isUsed: false, expiresAt: { gt: new Date() } },
+          where: {
+            userId,
+            isUsed: false,
+            expiresAt: { gt: now },
+          },
+          orderBy: { expiresAt: "asc" },
         },
       },
     });
 
-    return res.status(200).json({ success: true, data: user });
+    return res.status(200).json({
+      success: true,
+      data: {
+        role: user?.role ?? null,
+        points: aggregatedPoints, // Nilai hasil aggregate PointLot.remainingAmount
+        coupons: user?.coupons ?? [],
+      },
+    });
   } catch (error: any) {
     return res.status(500).json({ success: false, message: error.message });
   }

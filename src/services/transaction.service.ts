@@ -1,15 +1,25 @@
-// backend/src/services/transaction.service.ts
 import { Prisma } from "../generated/prisma/client.js";
-import { StatusTransaction } from "../generated/prisma/enums.js";
+import { StatusTransaction, UserRole } from "../generated/prisma/enums.js";
 import { prisma } from "../lib/prisma.js";
 
-// Type definition for each ticket tier chosen by the customer
+// 1. Konfigurasi Timeout Prisma Transaction (mencegah error timeout 5000ms di cloud DB)
+const TX_OPTIONS = {
+  maxWait: 10000,
+  timeout: 20000,
+};
+
+// Konstanta aturan bisnis sesuai spesifikasi
+const MIN_TRX_AFTER_VOUCHER_FOR_COUPON = 30000; // Ketentuan h: Minimal Rp 30.000 setelah dikurang voucher
+const FIXED_COUPON_DISCOUNT = 10000;            // Ketentuan j: Nilai coupon hanya Rp 10.000
+const MIN_TRX_FOR_POINTS = 100000;              // Ketentuan o: Minimal transaksi Rp 100.000 untuk pakai poin
+const MAX_POINTS_PER_TRX = 20000;               // Ketentuan o: Maksimal 20.000 poin dalam 1x transaksi
+const POINT_MULTIPLE = 10000;                   // Ketentuan o: Penggunaan kelipatan 10.000 dari 0
+
 export interface CheckoutItemInput {
   ticketTypeId: number;
   quantity: number;
 }
 
-// Type definition for the checkout payload sent from Frontend
 export interface CreateTransactionInput {
   userId: number;
   eventId: number;
@@ -19,103 +29,174 @@ export interface CreateTransactionInput {
   usePoints: boolean;
 }
 
-// Reusable Prisma include object so all transaction queries return consistent nested data
-const transactionDetailInclude = {
+// Reusable Prisma include untuk menampilkan detail transaksi secara konsisten
+export const transactionDetailInclude = {
   transactionItems: {
     include: {
       ticketType: {
         include: {
-          event: true,
+          event: {
+            select: {
+              id: true,
+              name: true,
+              location: true,
+              startDate: true,
+              endDate: true,
+              thumbnail: true,
+            },
+          },
         },
       },
     },
   },
   voucher: true,
   coupon: true,
+  attendances: {
+    include: {
+      reviews: true,
+    },
+  },
 } satisfies Prisma.TransactionInclude;
 
 /**
- * Pure helper function to compute final IDR total and capped point deduction.
- * Ensures totalAmount never drops below 0 IDR.
+ * Ketentuan n: Mengambil saldo poin aktif customer menggunakan fitur aggregate Prisma
+ * dari tabel point_lots berdasarkan kolom remainingAmount dan expiresAt > now.
+ */
+export const getActivePointsBalance = async (
+  db: Prisma.TransactionClient | typeof prisma,
+  userId: number,
+): Promise<number> => {
+  const now = new Date();
+
+  const aggregation = await db.pointLot.aggregate({
+    where: {
+      userId,
+      remainingAmount: { gt: 0 },
+      expiresAt: { gt: now },
+    },
+    _sum: {
+      remainingAmount: true,
+    },
+  });
+
+  return aggregation._sum.remainingAmount ?? 0;
+};
+
+/**
+ * Ketentuan h, j, o: Pure helper kalkulasi harga IDR, diskon voucher, diskon coupon, dan poin.
+ * - Coupon: Hanya berlaku jika (subtotal - voucherDiscount) >= 30.000, nilai diskon 10.000.
+ * - Point: Sekali pakai sekaligus, minimal transaksi 100.000, maksimal 20.000 poin,
+ *   dan wajib kelipatan 10.000 dari 0 (0, 10.000, atau 20.000).
  */
 export const calculatePricing = (
   subtotal: number,
   voucherDiscount: number,
   couponDiscount: number,
   availableUserPoints: number,
-  usePoints: boolean
+  usePoints: boolean,
 ) => {
-  // Calculate price after applying voucher and coupon discounts
-  const priceAfterPromos = Math.max(
-    0,
-    subtotal - voucherDiscount - couponDiscount
-  );
+  // Harga setelah dikurangi voucher (tidak boleh minus)
+  const priceAfterVoucher = Math.max(0, subtotal - voucherDiscount);
 
-  // If customer opted to use points, cap pointsDiscount at the remaining price
-  const pointsDiscount = usePoints
-    ? Math.min(Math.max(0, availableUserPoints), priceAfterPromos)
-    : 0;
+  // Harga setelah dikurangi coupon (tidak boleh minus)
+  const priceAfterPromos = Math.max(0, priceAfterVoucher - couponDiscount);
 
-  // Final amount to be paid in IDR
+  let pointsDiscount = 0;
+
+  // Ketentuan o: Poin hanya bisa dipakai jika usePoints = true dan nilai transaksi >= 100.000
+  if (usePoints && subtotal >= MIN_TRX_FOR_POINTS && priceAfterPromos >= POINT_MULTIPLE) {
+    // Batasi maksimal 20.000 poin, tidak melebihi saldo pointLot aktif, dan tidak melebihi sisa tagihan
+    const maxRawPoints = Math.min(
+      Math.max(0, availableUserPoints),
+      MAX_POINTS_PER_TRX,
+      priceAfterPromos,
+    );
+
+    // Bulatkan ke bawah ke kelipatan 10.000 terdekat (0, 10.000, atau 20.000)
+    pointsDiscount = Math.floor(maxRawPoints / POINT_MULTIPLE) * POINT_MULTIPLE;
+  }
+
+  // Total akhir yang harus dibayar dalam IDR
   const totalAmount = Math.max(0, priceAfterPromos - pointsDiscount);
 
-  return { priceAfterPromos, pointsDiscount, totalAmount };
+  return {
+    priceAfterVoucher,
+    priceAfterPromos,
+    pointsDiscount,
+    totalAmount,
+  };
 };
 
 /**
- * Reusable functional rollback helper.
- * Restores seats, points, vouchers, and coupons when a transaction becomes
- * EXPIRED, CANCELED, or REJECTED (can also be imported by Developer 2).
+ * Fungsi Rollback Terpusat (Dipicu saat status EXPIRED, REJECTED, atau CANCELED).
+ * Mengembalikan 4 nilai secara atomik:
+ * 1. Voucher (usedCount berkurang 1) -> Ketentuan e
+ * 2. Coupon (isUsed kembali menjadi false) -> Ketentuan i
+ * 3. Seat (availableSeat di tabel Event & TicketType bertambah kembali) -> Ketentuan m
+ * 4. Point (remainingAmount di PointLot yang terpakai & User.points bertambah kembali) -> Ketentuan p
  */
 export const rollbackTransactionResources = async (
   tx: Prisma.TransactionClient,
   transactionId: number,
-  targetStatus: "EXPIRED" | "CANCELED" | "REJECTED"
+  targetStatus: "EXPIRED" | "CANCELED" | "REJECTED",
 ) => {
-  // 1. Fetch transaction with its items inside the transaction lock
+  // 1. Ambil data transaksi beserta item tiketnya
   const trx = await tx.transaction.findUnique({
     where: { id: transactionId },
-    include: transactionDetailInclude,
+    include: {
+      transactionItems: {
+        include: {
+          ticketType: true,
+        },
+      },
+    },
   });
 
   if (!trx) {
-    throw new Error("Transaction not found for rollback");
+    throw new Error(`Transaction #${transactionId} not found for rollback`);
   }
 
-  // Guard against double-rollback if lazy evaluation and cron job run simultaneously
+  // Guard anti double-rollback jika sudah pernah di-rollback atau sudah DONE
   if (
     trx.status === StatusTransaction.EXPIRED ||
     trx.status === StatusTransaction.CANCELED ||
     trx.status === StatusTransaction.REJECTED ||
     trx.status === StatusTransaction.DONE
   ) {
-    return trx;
+    return await tx.transaction.findUniqueOrThrow({
+      where: { id: transactionId },
+      include: transactionDetailInclude,
+    });
   }
 
-  // 2. Restore seats for each TicketType and aggregate total seats for Event
-  let totalSeatsToRestore = 0;
-  let eventIdToRestore: number | null = null;
+  // 2. Ketentuan m: Kembalikan availableSeat di tabel TicketType dan tabel Event
+  const eventSeatsMap = new Map<number, number>();
 
   for (const item of trx.transactionItems) {
-    totalSeatsToRestore += item.quantity;
-    eventIdToRestore = item.ticketType.eventId;
+    const qty = Number(item.quantity) || 0;
+    if (qty <= 0) continue;
 
-    // Increment availableSeat back on the specific TicketType
+    const eventId = item.ticketType.eventId;
+    eventSeatsMap.set(eventId, (eventSeatsMap.get(eventId) || 0) + qty);
+
+    // Kembalikan kursi pada masing-masing TicketType
     await tx.ticketType.update({
       where: { id: item.ticketTypeId },
-      data: { availableSeat: { increment: item.quantity } },
+      data: { availableSeat: { increment: qty } },
     });
   }
 
-  // Increment availableSeat back on the parent Event
-  if (eventIdToRestore && totalSeatsToRestore > 0) {
-    await tx.event.update({
-      where: { id: eventIdToRestore },
-      data: { availableSeat: { increment: totalSeatsToRestore } },
-    });
+  // Kembalikan akumulasi kursi pada Event induk
+  for (const [eventId, totalSeatsToRestore] of eventSeatsMap.entries()) {
+    if (totalSeatsToRestore > 0) {
+      await tx.event.update({
+        where: { id: eventId },
+        data: { availableSeat: { increment: totalSeatsToRestore } },
+      });
+    }
   }
 
-  // 3. Restore Event Voucher usage count if one was used
+  // 3. Ketentuan e: Kembalikan nilai usedCount pada tabel Voucher
   if (trx.voucherId) {
     await tx.voucher.update({
       where: { id: trx.voucherId },
@@ -123,7 +204,7 @@ export const rollbackTransactionResources = async (
     });
   }
 
-  // 4. Restore System Coupon to unused (isUsed = false) if one was used
+  // 4. Ketentuan i: Kembalikan kolom isUsed menjadi false pada tabel Coupon
   if (trx.couponId) {
     await tx.coupon.update({
       where: { id: trx.couponId },
@@ -131,28 +212,24 @@ export const rollbackTransactionResources = async (
     });
   }
 
-  // 5. Refund deducted Points back to User and active PointLots
+  // 5. Ketentuan p: Kembalikan remainingAmount pada PointLot berdasarkan PointLot ID yang telah digunakan
+  // (diurutkan dari expiresAt terdekat yang memiliki selisih amount > remainingAmount)
   if (trx.pointsDiscount > 0) {
-    // Restore user's aggregate points balance
-    await tx.user.update({
-      where: { id: trx.userId },
-      data: { points: { increment: trx.pointsDiscount } },
-    });
-
-    // Restore remainingAmount across active PointLots without exceeding original lot.amount
-    const activeLots = await tx.pointLot.findMany({
-      where: { userId: trx.userId, expiresAt: { gt: new Date() } },
+    const userLots = await tx.pointLot.findMany({
+      where: { userId: trx.userId },
       orderBy: { expiresAt: "asc" },
     });
 
     let pointsLeftToRestore = trx.pointsDiscount;
 
-    for (const lot of activeLots) {
+    for (const lot of userLots) {
       if (pointsLeftToRestore <= 0) break;
-      const capacityInLot = Math.max(0, lot.amount - lot.remainingAmount);
 
-      if (capacityInLot > 0) {
-        const restoreAmount = Math.min(pointsLeftToRestore, capacityInLot);
+      // Kapasitas poin yang sempat terpakai pada PointLot ID ini
+      const usedInThisLot = Math.max(0, lot.amount - lot.remainingAmount);
+
+      if (usedInThisLot > 0) {
+        const restoreAmount = Math.min(pointsLeftToRestore, usedInThisLot);
         await tx.pointLot.update({
           where: { id: lot.id },
           data: { remainingAmount: { increment: restoreAmount } },
@@ -160,9 +237,16 @@ export const rollbackTransactionResources = async (
         pointsLeftToRestore -= restoreAmount;
       }
     }
+
+    // Sinkronkan juga kolom points pada tabel User
+    const newAggregatedPoints = await getActivePointsBalance(tx, trx.userId);
+    await tx.user.update({
+      where: { id: trx.userId },
+      data: { points: newAggregatedPoints },
+    });
   }
 
-  // 6. Update the transaction status to targetStatus and return full nested details
+  // 6. Ubah status transaksi menjadi EXPIRED / REJECTED / CANCELED
   return await tx.transaction.update({
     where: { id: transactionId },
     data: { status: StatusTransaction[targetStatus] },
@@ -171,219 +255,277 @@ export const rollbackTransactionResources = async (
 };
 
 /**
- * Creates a new ticket transaction atomically using Prisma $transaction.
+ * Membuat transaksi pembelian tiket baru secara atomik dengan prisma.$transaction.
  */
 export const createTransaction = async (input: CreateTransactionInput) => {
   const { userId, eventId, items, voucherCode, couponCode, usePoints } = input;
 
-  // Sanitize and filter valid positive ticket quantities
   const validItems = (items || []).filter(
-    (item) => Number.isInteger(Number(item.quantity)) && Number(item.quantity) > 0
+    (item) =>
+      Number.isInteger(Number(item.quantity)) && Number(item.quantity) > 0,
   );
 
   if (validItems.length === 0) {
-    throw new Error("Please select at least one ticket.");
+    throw new Error("Pilih minimal 1 tiket untuk melakukan transaksi.");
   }
 
-  return await prisma.$transaction(async (tx) => {
-    const now = new Date();
-    let subtotal = 0;
-    let totalTicketsRequested = 0;
+  return await prisma.$transaction(
+    async (tx) => {
+      const now = new Date();
 
-    // 1. Validate each TicketType and calculate subtotal in IDR
-    const validatedItems: Array<{
-      ticketTypeId: number;
-      quantity: number;
-      price: number;
-    }> = [];
-
-    for (const rawItem of validItems) {
-      const ticketTypeId = Number(rawItem.ticketTypeId);
-      const quantity = Number(rawItem.quantity);
-
-      const ticket = await tx.ticketType.findUnique({
-        where: { id: ticketTypeId },
-      });
-
-      if (!ticket || ticket.eventId !== eventId) {
-        throw new Error(`Invalid ticket type ID ${ticketTypeId}`);
+      // Ketentuan a: Pastikan hanya user dengan role CUSTOMER yang bisa membeli tiket
+      const user = await tx.user.findUnique({ where: { id: userId } });
+      if (!user) {
+        throw new Error("User tidak ditemukan.");
       }
-
-      if (ticket.availableSeat < quantity) {
+      if (user.role !== UserRole.CUSTOMER) {
         throw new Error(
-          `Not enough seats for ${ticket.name}. Remaining: ${ticket.availableSeat}`
+          "Hanya akun Customer yang diperbolehkan membeli tiket event.",
         );
       }
 
-      subtotal += ticket.price * quantity;
-      totalTicketsRequested += quantity;
+      let subtotal = 0;
+      let totalTicketsRequested = 0;
 
-      validatedItems.push({
-        ticketTypeId: ticket.id,
-        quantity,
-        price: ticket.price,
-      });
+      // 1. Ketentuan l: Validasi kursi dan kurangi availableSeat di TicketType & Event
+      const validatedItems: Array<{
+        ticketTypeId: number;
+        quantity: number;
+        price: number;
+      }> = [];
 
-      // Immediately reserve/deduct seats from TicketType
-      await tx.ticketType.update({
-        where: { id: ticket.id },
-        data: { availableSeat: { decrement: quantity } },
-      });
-    }
+      for (const rawItem of validItems) {
+        const ticketTypeId = Number(rawItem.ticketTypeId);
+        const quantity = Number(rawItem.quantity);
 
-    // Deduct aggregate availableSeat from the parent Event
-    await tx.event.update({
-      where: { id: eventId },
-      data: { availableSeat: { decrement: totalTicketsRequested } },
-    });
-
-    // 2. Validate & lock Organizer Voucher (if provided)
-    let voucherId: number | null = null;
-    let voucherDiscount = 0;
-
-    if (voucherCode && voucherCode.trim() !== "") {
-      const voucher = await tx.voucher.findUnique({
-        where: { code: voucherCode.trim().toUpperCase() },
-      });
-
-      if (
-        !voucher ||
-        voucher.eventId !== eventId ||
-        !voucher.isActive ||
-        voucher.startAt > now ||
-        voucher.expiresAt < now ||
-        voucher.usedCount >= voucher.maxUsage
-      ) {
-        throw new Error(
-          "Voucher is invalid, expired, or has reached maximum usage."
-        );
-      }
-
-      voucherId = voucher.id;
-      voucherDiscount = Math.min(subtotal, voucher.discountValue);
-
-      // Increment usedCount atomically
-      await tx.voucher.update({
-        where: { id: voucher.id },
-        data: { usedCount: { increment: 1 } },
-      });
-    }
-
-    // 3. Validate & lock Referral/System Coupon (if provided)
-    let couponId: number | null = null;
-    let couponDiscount = 0;
-
-    if (couponCode && couponCode.trim() !== "") {
-      const coupon = await tx.coupon.findUnique({
-        where: { code: couponCode.trim().toUpperCase() },
-      });
-
-      if (
-        !coupon ||
-        coupon.userId !== userId ||
-        coupon.isUsed ||
-        coupon.expiresAt < now ||
-        subtotal < coupon.minTransaction
-      ) {
-        throw new Error(
-          "Coupon is invalid, expired, or minimum transaction not met."
-        );
-      }
-
-      couponId = coupon.id;
-      couponDiscount = Math.min(
-        Math.max(0, subtotal - voucherDiscount),
-        coupon.discountValue
-      );
-
-      // Mark coupon as used
-      await tx.coupon.update({
-        where: { id: coupon.id },
-        data: { isUsed: true },
-      });
-    }
-
-    // 4. Fetch User & calculate Points deduction
-    const user = await tx.user.findUnique({ where: { id: userId } });
-    if (!user) throw new Error("User not found.");
-
-    const { pointsDiscount, totalAmount } = calculatePricing(
-      subtotal,
-      voucherDiscount,
-      couponDiscount,
-      user.points,
-      usePoints
-    );
-
-    // If points are used, deduct from User.points and FIFO from PointLot
-    if (pointsDiscount > 0) {
-      await tx.user.update({
-        where: { id: userId },
-        data: { points: { decrement: pointsDiscount } },
-      });
-
-      let remainingToDeduct = pointsDiscount;
-      const activeLots = await tx.pointLot.findMany({
-        where: { userId, remainingAmount: { gt: 0 }, expiresAt: { gt: now } },
-        orderBy: { expiresAt: "asc" },
-      });
-
-      for (const lot of activeLots) {
-        if (remainingToDeduct <= 0) break;
-        const deductFromLot = Math.min(lot.remainingAmount, remainingToDeduct);
-
-        await tx.pointLot.update({
-          where: { id: lot.id },
-          data: { remainingAmount: { decrement: deductFromLot } },
+        const ticket = await tx.ticketType.findUnique({
+          where: { id: ticketTypeId },
         });
-        remainingToDeduct -= deductFromLot;
+
+        if (!ticket || ticket.eventId !== eventId) {
+          throw new Error(`Tipe tiket ID ${ticketTypeId} tidak valid.`);
+        }
+
+        if (ticket.availableSeat < quantity) {
+          throw new Error(
+            `Kursi untuk tiket "${ticket.name}" tidak mencukupi. Tersisa: ${ticket.availableSeat}`,
+          );
+        }
+
+        subtotal += ticket.price * quantity;
+        totalTicketsRequested += quantity;
+
+        validatedItems.push({
+          ticketTypeId: ticket.id,
+          quantity,
+          price: ticket.price,
+        });
+
+        // Kurangi availableSeat di tabel TicketType
+        await tx.ticketType.update({
+          where: { id: ticket.id },
+          data: { availableSeat: { decrement: quantity } },
+        });
       }
-    }
 
-    // 5. Set 2-hour payment deadline (2 * 60 * 60 * 1000 ms)
-    const paymentDeadline = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+      // Cek dan kurangi availableSeat di tabel Event
+      const eventRecord = await tx.event.findUnique({ where: { id: eventId } });
+      if (!eventRecord || eventRecord.availableSeat < totalTicketsRequested) {
+        throw new Error("Total kursi tersedia pada event ini tidak mencukupi.");
+      }
 
-    // If totalAmount is 0 (Free event or 100% covered by points/vouchers),
-    // move straight to WAITING_FOR_ADMIN_CONFIRMATION with a 3-day admin deadline
-    const initialStatus: StatusTransaction =
-      totalAmount === 0
-        ? StatusTransaction.WAITING_FOR_ADMIN_CONFIRMATION
-        : StatusTransaction.WAITING_FOR_PAYMENT;
+      await tx.event.update({
+        where: { id: eventId },
+        data: { availableSeat: { decrement: totalTicketsRequested } },
+      });
 
-    const adminDeadline =
-      totalAmount === 0
-        ? new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
-        : null;
+      // 2. Ketentuan c, d, f: Validasi & Gunakan Voucher Event (1 voucher per transaksi, tidak berlaku kelipatan)
+      let voucherId: number | null = null;
+      let voucherDiscount = 0;
 
-    // 6. Create the Transaction and TransactionItems records
-    return await tx.transaction.create({
-      data: {
-        userId,
-        voucherId,
-        couponId,
-        status: initialStatus,
+      if (voucherCode && voucherCode.trim() !== "") {
+        const voucher = await tx.voucher.findUnique({
+          where: { code: voucherCode.trim().toUpperCase() },
+        });
+
+        // Ketentuan d: Voucher hanya bisa digunakan jika maxUsage > usedCount
+        if (
+          !voucher ||
+          voucher.eventId !== eventId ||
+          !voucher.isActive ||
+          voucher.startAt > now ||
+          voucher.expiresAt < now ||
+          !(voucher.maxUsage > voucher.usedCount)
+        ) {
+          throw new Error(
+            "Voucher tidak valid, sudah kedaluwarsa, atau kuota penggunaan sudah habis.",
+          );
+        }
+
+        voucherId = voucher.id;
+        // Ketentuan f: 1 transaksi hanya 1 voucher, tidak dikali jumlah tiket
+        voucherDiscount = Math.min(subtotal, voucher.discountValue);
+
+        // Update penggunaan voucher
+        await tx.voucher.update({
+          where: { id: voucher.id },
+          data: { usedCount: { increment: 1 } },
+        });
+      }
+
+      // Hitung nilai transaksi setelah dikurangi potongan voucher
+      const priceAfterVoucher = Math.max(0, subtotal - voucherDiscount);
+
+      // 3. Ketentuan b, g, h, i, j: Validasi & Gunakan Coupon
+      let couponId: number | null = null;
+      let couponDiscount = 0;
+
+      if (couponCode && couponCode.trim() !== "") {
+        const coupon = await tx.coupon.findUnique({
+          where: { code: couponCode.trim().toUpperCase() },
+        });
+
+        if (!coupon) {
+          throw new Error("Kode kupon tidak ditemukan.");
+        }
+
+        // Ketentuan b: Coupon hanya bisa digunakan untuk user yang sama
+        if (coupon.userId !== userId) {
+          throw new Error("Kupon ini bukan milik akun Anda.");
+        }
+
+        // Ketentuan g: Kolom isUsed harus false (jika true tidak bisa digunakan)
+        if (coupon.isUsed) {
+          throw new Error("Kupon ini sudah pernah digunakan.");
+        }
+
+        if (coupon.expiresAt < now) {
+          throw new Error("Kupon ini sudah kedaluwarsa.");
+        }
+
+        // Ketentuan h: Nilai transaksi SETELAH dikurang potongan voucher minimal Rp 30.000
+        const minRequiredAfterVoucher = Math.max(
+          MIN_TRX_AFTER_VOUCHER_FOR_COUPON,
+          coupon.minTransaction,
+        );
+
+        if (priceAfterVoucher < minRequiredAfterVoucher) {
+          throw new Error(
+            `Kupon hanya dapat digunakan jika nilai transaksi setelah potongan voucher minimal Rp ${minRequiredAfterVoucher.toLocaleString("id-ID")}.`,
+          );
+        }
+
+        couponId = coupon.id;
+        // Ketentuan j: Nilai coupon hanya Rp 10.000
+        couponDiscount = Math.min(priceAfterVoucher, FIXED_COUPON_DISCOUNT);
+
+        // Ketentuan i: Ubah status isUsed menjadi true saat transaksi dibuat
+        await tx.coupon.update({
+          where: { id: coupon.id },
+          data: { isUsed: true },
+        });
+      }
+
+      // 4. Ketentuan n, o, p: Aggregate saldo PointLot & potong berdasarkan expiresAt terdekat
+      const availablePointsFromLots = await getActivePointsBalance(tx, userId);
+
+      // Jika user memilih menggunakan poin tetapi transaksi belum mencapai Rp 100.000, beri pesan jelas
+      if (usePoints && subtotal < MIN_TRX_FOR_POINTS) {
+        throw new Error(
+          `Minimal transaksi Rp ${MIN_TRX_FOR_POINTS.toLocaleString("id-ID")} untuk dapat menggunakan poin.`,
+        );
+      }
+
+      const { pointsDiscount, totalAmount } = calculatePricing(
         subtotal,
         voucherDiscount,
         couponDiscount,
-        pointsDiscount,
-        totalAmount,
-        paymentDeadline,
-        adminDeadline,
-        paymentProof: totalAmount === 0 ? "FREE_OR_FULLY_COVERED" : null,
-        transactionItems: {
-          create: validatedItems,
+        availablePointsFromLots,
+        usePoints,
+      );
+
+      // Ketentuan p: Potong poin dari PointLot ID dengan expiresAt paling dekat
+      if (pointsDiscount > 0) {
+        let remainingToDeduct = pointsDiscount;
+
+        const activeLots = await tx.pointLot.findMany({
+          where: {
+            userId,
+            remainingAmount: { gt: 0 },
+            expiresAt: { gt: now },
+          },
+          orderBy: { expiresAt: "asc" }, // Paling dekat expire digunakan lebih dulu
+        });
+
+        for (const lot of activeLots) {
+          if (remainingToDeduct <= 0) break;
+          const deductFromLot = Math.min(
+            lot.remainingAmount,
+            remainingToDeduct,
+          );
+
+          await tx.pointLot.update({
+            where: { id: lot.id },
+            data: { remainingAmount: { decrement: deductFromLot } },
+          });
+
+          remainingToDeduct -= deductFromLot;
+        }
+
+        // Sinkronkan saldo poin di tabel User dengan hasil aggregate PointLot terbaru
+        const updatedPointsBalance = await getActivePointsBalance(tx, userId);
+        await tx.user.update({
+          where: { id: userId },
+          data: { points: updatedPointsBalance },
+        });
+      }
+
+      // 5. Set batas waktu pembayaran 2 jam
+      const paymentDeadline = new Date(now.getTime() + 2 * 60 * 60 * 1000);
+
+      const initialStatus: StatusTransaction =
+        totalAmount === 0
+          ? StatusTransaction.WAITING_FOR_ADMIN_CONFIRMATION
+          : StatusTransaction.WAITING_FOR_PAYMENT;
+
+      const adminDeadline =
+        totalAmount === 0
+          ? new Date(now.getTime() + 3 * 24 * 60 * 60 * 1000)
+          : null;
+
+      // 6. Simpan transaksi ke database
+      return await tx.transaction.create({
+        data: {
+          userId,
+          voucherId,
+          couponId,
+          status: initialStatus,
+          subtotal,
+          voucherDiscount,
+          couponDiscount,
+          pointsDiscount,
+          totalAmount,
+          paymentDeadline,
+          adminDeadline,
+          paymentProof: totalAmount === 0 ? "FREE_OR_FULLY_COVERED" : null,
+          transactionItems: {
+            create: validatedItems,
+          },
         },
-      },
-      include: transactionDetailInclude,
-    });
-  });
+        include: transactionDetailInclude,
+      });
+    },
+    TX_OPTIONS,
+  );
 };
 
 /**
- * Checks a single transaction's deadlines and automatically transitions + rolls back
- * if overdue. Called lazily on GET requests and before payment proof upload.
+ * Mengevaluasi batas waktu transaksi (2 jam untuk upload bukti, 3 hari untuk konfirmasi admin).
+ * Jika lewat batas waktu, memicu rollback otomatis.
  */
-export const evaluateAndSyncTransactionStatus = async (transactionId: number) => {
+export const evaluateAndSyncTransactionStatus = async (
+  transactionId: number,
+) => {
   const now = new Date();
 
   const trx = await prisma.transaction.findUnique({
@@ -393,24 +535,26 @@ export const evaluateAndSyncTransactionStatus = async (transactionId: number) =>
 
   if (!trx) throw new Error("Transaction not found");
 
-  // Auto-Expire if waiting for payment and 2-hour paymentDeadline has passed
+  // Kondisi Rollback 1: EXPIRED (lewat 2 jam belum upload bukti pembayaran)
   if (
     trx.status === StatusTransaction.WAITING_FOR_PAYMENT &&
-    now > trx.paymentDeadline
+    now >= trx.paymentDeadline
   ) {
-    return await prisma.$transaction((tx) =>
-      rollbackTransactionResources(tx, trx.id, "EXPIRED")
+    return await prisma.$transaction(
+      (tx) => rollbackTransactionResources(tx, trx.id, "EXPIRED"),
+      TX_OPTIONS,
     );
   }
 
-  // Auto-Cancel if waiting for admin confirmation and 3-day adminDeadline has passed
+  // Kondisi Rollback 2: CANCELED (lewat 3 hari belum dikonfirmasi admin/organizer)
   if (
     trx.status === StatusTransaction.WAITING_FOR_ADMIN_CONFIRMATION &&
     trx.adminDeadline &&
-    now > trx.adminDeadline
+    now >= trx.adminDeadline
   ) {
-    return await prisma.$transaction((tx) =>
-      rollbackTransactionResources(tx, trx.id, "CANCELED")
+    return await prisma.$transaction(
+      (tx) => rollbackTransactionResources(tx, trx.id, "CANCELED"),
+      TX_OPTIONS,
     );
   }
 
@@ -418,14 +562,25 @@ export const evaluateAndSyncTransactionStatus = async (transactionId: number) =>
 };
 
 /**
- * Uploads payment proof within the 2-hour window and sets the 3-day admin deadline.
+ * Kondisi Rollback 3: REJECTED (Saat Organizer/Admin menolak transaksi).
+ * Fungsi ini dapat dipanggil oleh endpoint Dashboard Organizer (Developer 2)
+ * agar ketika transaksi di-REJECT, Voucher, Coupon, Seat, dan Point otomatis dikembalikan!
+ */
+export const rejectTransactionByOrganizer = async (transactionId: number) => {
+  return await prisma.$transaction(
+    (tx) => rollbackTransactionResources(tx, transactionId, "REJECTED"),
+    TX_OPTIONS,
+  );
+};
+
+/**
+ * Upload atau Re-upload bukti pembayaran (hanya sebelum dikonfirmasi/ditolak admin).
  */
 export const submitPaymentProof = async (
   transactionId: number,
   userId: number,
-  paymentProofUrl: string
+  paymentProofUrl: string,
 ) => {
-  // First sync status to ensure the 2-hour deadline hasn't just passed
   const currentTrx = await evaluateAndSyncTransactionStatus(transactionId);
 
   if (!currentTrx || currentTrx.userId !== userId) {
@@ -433,17 +588,26 @@ export const submitPaymentProof = async (
   }
 
   if (currentTrx.status === StatusTransaction.EXPIRED) {
-    throw new Error("Transaction has expired (passed 2-hour payment deadline).");
-  }
-
-  if (currentTrx.status !== StatusTransaction.WAITING_FOR_PAYMENT) {
     throw new Error(
-      `Cannot upload payment proof for status: ${currentTrx.status}`
+      "Transaction has expired (passed 2-hour payment deadline).",
     );
   }
 
-  // Set 3-day deadline for Organizer confirmation (3 * 24 * 60 * 60 * 1000 ms)
-  const adminDeadline = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
+  const isInitialUpload =
+    currentTrx.status === StatusTransaction.WAITING_FOR_PAYMENT;
+  const isReuploadBeforeAdminConfirm =
+    currentTrx.status === StatusTransaction.WAITING_FOR_ADMIN_CONFIRMATION;
+
+  if (!isInitialUpload && !isReuploadBeforeAdminConfirm) {
+    throw new Error(
+      `Cannot upload or re-upload payment proof when transaction status is ${currentTrx.status}.`,
+    );
+  }
+
+  const adminDeadline =
+    isReuploadBeforeAdminConfirm && currentTrx.adminDeadline
+      ? currentTrx.adminDeadline
+      : new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
 
   return await prisma.transaction.update({
     where: { id: transactionId },
@@ -456,51 +620,77 @@ export const submitPaymentProof = async (
   });
 };
 
+let isSweeping = false;
+
 /**
- * Batch job function (can be called every minute via node-cron or setInterval)
- * to sweep all overdue transactions in the database.
+ * Fungsi Cron Job yang berjalan setiap menit untuk mengecek transaksi EXPIRED & CANCELED.
  */
 export const sweepOverdueTransactions = async () => {
-  const now = new Date();
+  if (isSweeping) return { expiredCount: 0, canceledCount: 0 };
+  isSweeping = true;
 
-  // 1. Find all WAITING_FOR_PAYMENT past 2 hours
-  const expiredList = await prisma.transaction.findMany({
-    where: {
-      status: StatusTransaction.WAITING_FOR_PAYMENT,
-      paymentDeadline: { lt: now },
-    },
-    select: { id: true },
-  });
+  let expiredProcessed = 0;
+  let canceledProcessed = 0;
 
-  for (const item of expiredList) {
-    await prisma.$transaction((tx) =>
-      rollbackTransactionResources(tx, item.id, "EXPIRED")
-    );
+  try {
+    const now = new Date();
+
+    const expiredList = await prisma.transaction.findMany({
+      where: {
+        status: StatusTransaction.WAITING_FOR_PAYMENT,
+        paymentDeadline: { lte: now },
+      },
+      select: { id: true },
+    });
+
+    for (const item of expiredList) {
+      try {
+        await prisma.$transaction(
+          (tx) => rollbackTransactionResources(tx, item.id, "EXPIRED"),
+          TX_OPTIONS,
+        );
+        expiredProcessed++;
+      } catch (err) {
+        console.error(
+          `[Cron Rollback Error] Failed to expire Transaction #${item.id}:`,
+          err,
+        );
+      }
+    }
+
+    const canceledList = await prisma.transaction.findMany({
+      where: {
+        status: StatusTransaction.WAITING_FOR_ADMIN_CONFIRMATION,
+        adminDeadline: { lte: now },
+      },
+      select: { id: true },
+    });
+
+    for (const item of canceledList) {
+      try {
+        await prisma.$transaction(
+          (tx) => rollbackTransactionResources(tx, item.id, "CANCELED"),
+          TX_OPTIONS,
+        );
+        canceledProcessed++;
+      } catch (err) {
+        console.error(
+          `[Cron Rollback Error] Failed to cancel Transaction #${item.id}:`,
+          err,
+        );
+      }
+    }
+
+    return {
+      expiredCount: expiredProcessed,
+      canceledCount: canceledProcessed,
+    };
+  } finally {
+    isSweeping = false;
   }
-
-  // 2. Find all WAITING_FOR_ADMIN_CONFIRMATION past 3 days
-  const canceledList = await prisma.transaction.findMany({
-    where: {
-      status: StatusTransaction.WAITING_FOR_ADMIN_CONFIRMATION,
-      adminDeadline: { lt: now },
-    },
-    select: { id: true },
-  });
-
-  for (const item of canceledList) {
-    await prisma.$transaction((tx) =>
-      rollbackTransactionResources(tx, item.id, "CANCELED")
-    );
-  }
-
-  return {
-    expiredCount: expiredList.length,
-    canceledCount: canceledList.length,
-  };
 };
 
 export const getCustomerTransactions = async (userId: number) => {
-  // 1. Find any transactions for this user that might have crossed their 2h or 3d deadline
   const pendingTransactions = await prisma.transaction.findMany({
     where: {
       userId,
@@ -514,12 +704,10 @@ export const getCustomerTransactions = async (userId: number) => {
     select: { id: true },
   });
 
-  // 2. Run deadline & rollback checks on each active transaction
   await Promise.all(
-    pendingTransactions.map((trx) => evaluateAndSyncTransactionStatus(trx.id))
+    pendingTransactions.map((trx) => evaluateAndSyncTransactionStatus(trx.id)),
   );
 
-  // 3. Return the full, freshly synced transaction history sorted newest first
   return await prisma.transaction.findMany({
     where: { userId },
     include: transactionDetailInclude,

@@ -1,4 +1,3 @@
-// backend/src/routes/transaction.route.ts
 import express from "express";
 import { verifyToken, verifyRole } from "../middleware/auth.middleware.js";
 import { upload } from "../middleware/upload.middleware.js";
