@@ -1,4 +1,4 @@
-import { Request, Response } from "express";
+import { NextFunction, Request, Response } from "express";
 import {
   createTransaction,
   evaluateAndSyncTransactionStatus,
@@ -8,30 +8,35 @@ import {
 } from "../services/transaction.service.js";
 import { prisma } from "../lib/prisma.js";
 import { uploadImage } from "../lib/cloudinary.js";
+import { ApiError } from "../utils/api-error.js";
+import { StatusTransaction } from "../generated/prisma/enums.js";
 
-// Helper function to safely extract the logged-in user's ID from Developer 2's verifyToken middleware
+// Helper function to safely extract the logged-in user's ID from verifyToken middleware
 const getAuthenticatedUserId = (req: Request, res: Response): number => {
-  // Developer 2's verifyToken sets `res.locals.user = payload`
   const rawId =
-    res.locals.user?.id ??
-    res.locals.user?.userId ??
-    (req as any).user?.id;
+    res.locals.user?.id ?? res.locals.user?.userId ?? (req as any).user?.id;
 
   const userId = Number(rawId);
   if (!rawId || isNaN(userId)) {
-    throw new Error("Unauthorized: Valid user session not found.");
+    throw new ApiError("Unauthorized: Valid user session not found.", 401);
   }
   return userId;
 };
 
-// POST /api/transactions — Create a new ticket purchase transaction
-export const handleCreateTransaction = async (req: Request, res: Response) => {
+// POST /transactions — Create a new ticket purchase transaction
+export const handleCreateTransaction = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
-    // 1. Get authenticated customer ID from res.locals.user
     const userId = getAuthenticatedUserId(req, res);
     const { eventId, items, voucherCode, couponCode, usePoints } = req.body;
 
-    // 2. Call functional transaction creation service
+    if (!eventId || isNaN(Number(eventId))) {
+      throw new ApiError("Valid eventId is required.", 400);
+    }
+
     const transaction = await createTransaction({
       userId,
       eventId: Number(eventId),
@@ -43,28 +48,26 @@ export const handleCreateTransaction = async (req: Request, res: Response) => {
 
     return res.status(201).json({
       success: true,
-      message: "Transaction created. Please upload payment proof within 2 hours.",
+      message:
+        "Transaction created. Please upload payment proof within 2 hours.",
       data: transaction,
     });
-  } catch (error: any) {
-    return res.status(400).json({
-      success: false,
-      message: error.message || "Failed to create transaction",
-    });
+  } catch (error) {
+    next(error);
   }
 };
 
-// GET /api/transactions/:id — Fetch transaction details (with automatic deadline evaluation)
-export const handleGetTransactionById = async (req: Request, res: Response) => {
+// GET /transactions/:id — Fetch transaction details (with automatic deadline evaluation)
+export const handleGetTransactionById = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const transactionId = Number(req.params.id);
 
-    // Guard against non-numeric IDs (e.g., if a wrong URL param is passed)
     if (isNaN(transactionId) || transactionId <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid transaction ID parameter.",
-      });
+      throw new ApiError("Invalid transaction ID parameter.", 400);
     }
 
     const transaction = await evaluateAndSyncTransactionStatus(transactionId);
@@ -73,47 +76,41 @@ export const handleGetTransactionById = async (req: Request, res: Response) => {
       success: true,
       data: transaction,
     });
-  } catch (error: any) {
-    return res.status(404).json({
-      success: false,
-      message: error.message || "Transaction not found",
-    });
+  } catch (error) {
+    next(error);
   }
 };
 
-// PATCH /api/transactions/:id/payment-proof — Upload payment proof image
-export const handleUploadPaymentProof = async (req: Request, res: Response) => {
+// PATCH /transactions/:id/payment-proof — Upload payment proof image
+export const handleUploadPaymentProof = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
-    // 1. Get authenticated customer ID from res.locals.user
     const userId = getAuthenticatedUserId(req, res);
     const transactionId = Number(req.params.id);
 
     if (isNaN(transactionId) || transactionId <= 0) {
-      return res.status(400).json({
-        success: false,
-        message: "Invalid transaction ID parameter.",
-      });
+      throw new ApiError("Invalid transaction ID parameter.", 400);
     }
 
-    // 2. Ensure Developer 2's upload() Multer middleware captured the file
     if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        message: "Please select an image file for payment proof.",
-      });
+      throw new ApiError(
+        "Please select an image file for payment proof.",
+        400,
+      );
     }
 
-    // 3. Upload image buffer to Cloudinary
     const paymentProofUrl = await uploadImage(
       req.file.buffer,
-      "payment-proofs"
+      "payment-proofs",
     );
 
-    // 4. Save proof URL and update status to WAITING_FOR_ADMIN_CONFIRMATION
     const updated = await submitPaymentProof(
       transactionId,
       userId,
-      paymentProofUrl
+      paymentProofUrl,
     );
 
     return res.status(200).json({
@@ -121,24 +118,25 @@ export const handleUploadPaymentProof = async (req: Request, res: Response) => {
       message: "Payment proof uploaded! Waiting for admin confirmation.",
       data: updated,
     });
-  } catch (error: any) {
-    return res.status(400).json({
-      success: false,
-      message: error.message || "Failed to upload payment proof",
-    });
+  } catch (error) {
+    next(error);
   }
 };
 
-// GET /api/transactions/wallet — Fetch customer's points & active coupons for checkout
-export const handleGetCustomerWallet = async (req: Request, res: Response) => {
+// GET /transactions/wallet — Fetch customer's points & active coupons for checkout
+export const handleGetCustomerWallet = async (
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) => {
   try {
     const userId = getAuthenticatedUserId(req, res);
     const now = new Date();
 
-    // 1. Ketentuan n: Hitung total poin aktif dari tabel point_lots dengan prisma.pointLot.aggregate
+    // 1. Rule n: Calculate total active points from point_lots table via prisma.pointLot.aggregate
     const aggregatedPoints = await getActivePointsBalance(prisma, userId);
 
-    // 2. Ketentuan b & g: Ambil kupon milik user yang sama, isUsed = false, dan belum expired
+    // 2. Rules b & g: Fetch coupons belonging to the same user where isUsed = false and not expired
     const user = await prisma.user.findUnique({
       where: { id: userId },
       select: {
@@ -155,39 +153,48 @@ export const handleGetCustomerWallet = async (req: Request, res: Response) => {
       },
     });
 
+    if (!user) {
+      throw new ApiError("Customer account not found.", 404);
+    }
+
     return res.status(200).json({
       success: true,
       data: {
-        role: user?.role ?? null,
-        points: aggregatedPoints, // Nilai hasil aggregate PointLot.remainingAmount
-        coupons: user?.coupons ?? [],
+        role: user.role,
+        points: aggregatedPoints,
+        coupons: user.coupons,
       },
     });
-  } catch (error: any) {
-    return res.status(500).json({ success: false, message: error.message });
+  } catch (error) {
+    next(error);
   }
 };
 
-// GET /transactions — Fetch all transactions for the logged-in customer
+// GET /transactions — Fetch paginated transactions for the logged-in customer
 export const handleGetCustomerTransactions = async (
   req: Request,
-  res: Response
+  res: Response,
+  next: NextFunction,
 ) => {
   try {
-    // 1. Extract the logged-in customer ID from res.locals.user / req.user
     const userId = getAuthenticatedUserId(req, res);
+    const { page, take, limit, status, search, sortBy, sortOrder } = req.query;
 
-    // 2. Fetch synced transaction history from the service
-    const transactions = await getCustomerTransactions(userId);
+    const result = await getCustomerTransactions(userId, {
+      page: page ? Number(page) : 1,
+      take: take ? Number(take) : limit ? Number(limit) : 5,
+      status: (status as StatusTransaction | "ALL") || "ALL",
+      search: (search as string) || "",
+      sortBy: (sortBy as string) || "createdAt",
+      sortOrder: (sortOrder as string) || "desc",
+    });
 
     return res.status(200).json({
       success: true,
-      data: transactions,
+      data: result.data,
+      meta: result.meta,
     });
-  } catch (error: any) {
-    return res.status(400).json({
-      success: false,
-      message: error.message || "Failed to fetch transaction history.",
-    });
+  } catch (error) {
+    next(error);
   }
 };

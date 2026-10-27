@@ -1,14 +1,15 @@
-import { prisma } from '../lib/prisma.js';
-import { CreateEventDTO, EventQueryFilter } from '../types/event.types.js';
+import { prisma } from "../lib/prisma.js";
+import { CreateEventDTO, EventQueryFilter } from "../types/event.types.js";
+import { ApiError } from "../utils/api-error.js";
 
 export const createEventService = async (
   organizerId: number,
   data: CreateEventDTO,
-  thumbnailUrl: string
+  thumbnailUrl: string,
 ) => {
   const totalSeat = (data.tickets || []).reduce(
     (acc, curr) => acc + Number(curr.totalSeat),
-    0
+    0,
   );
 
   return await prisma.$transaction(async (tx) => {
@@ -47,7 +48,7 @@ export const createEventService = async (
         data: {
           eventId: event.id,
           code: data.voucher.code.toUpperCase().trim(),
-          notes: data.voucher.notes || '',
+          notes: data.voucher.notes || "",
           discountValue: Number(data.voucher.discountValue),
           maxUsage: Number(data.voucher.maxUsage),
           usedCount: 0,
@@ -63,26 +64,34 @@ export const createEventService = async (
 };
 
 export const findEventsService = async (filters: EventQueryFilter) => {
-  const { search, categoryId, location, page = 1, limit = 12 } = filters;
-  const pageNum = Math.max(1, Number(page));
-  const limitNum = Math.max(1, Number(limit));
+  const { search, categoryId, location, page = 1, limit = 8 } = filters;
+
+  // Ensure page and limit are valid positive integers (cap limit at 50)
+  const pageNum = Math.max(1, Number(page) || 1);
+  const limitNum = Math.max(1, Math.min(50, Number(limit) || 8));
   const skip = (pageNum - 1) * limitNum;
 
   const where: any = {};
 
-  if (search && search.trim() !== '') {
-    where.name = { contains: search.trim(), mode: 'insensitive' };
+  if (search && search.trim() !== "") {
+    where.name = { contains: search.trim(), mode: "insensitive" };
   }
 
-  if (categoryId) {
+  if (categoryId && Number(categoryId) > 0) {
     where.categoryId = Number(categoryId);
   }
 
-  if (location && location !== 'Semua Lokasi') {
-    where.location = { contains: location.trim(), mode: 'insensitive' };
+  if (
+    location &&
+    location.trim() !== "" &&
+    location !== "Semua Lokasi" &&
+    location !== "All Locations"
+  ) {
+    where.location = { contains: location.trim(), mode: "insensitive" };
   }
 
-  const [events, total] = await Promise.all([
+  // Run paginated query, total count, and distinct locations query in parallel
+  const [events, total, distinctLocations] = await Promise.all([
     prisma.event.findMany({
       where,
       include: {
@@ -90,12 +99,19 @@ export const findEventsService = async (filters: EventQueryFilter) => {
         ticketTypes: true,
         vouchers: true,
       },
-      orderBy: { startDate: 'asc' },
+      orderBy: { startDate: "asc" },
       skip,
       take: limitNum,
     }),
     prisma.event.count({ where }),
+    prisma.event.findMany({
+      select: { location: true },
+      distinct: ["location"],
+      orderBy: { location: "asc" },
+    }),
   ]);
+
+  const totalPages = Math.max(1, Math.ceil(total / limitNum));
 
   return {
     data: events,
@@ -103,13 +119,18 @@ export const findEventsService = async (filters: EventQueryFilter) => {
       page: pageNum,
       limit: limitNum,
       total,
-      totalPages: Math.ceil(total / limitNum),
+      totalPages,
+      hasNextPage: pageNum < totalPages,
+      hasPrevPage: pageNum > 1,
+      locations: distinctLocations
+        .map((item) => item.location)
+        .filter(Boolean),
     },
   };
 };
 
 export const findEventByIdService = async (id: number) => {
-  return await prisma.event.findUnique({
+  const event = await prisma.event.findUnique({
     where: { id },
     include: {
       category: true,
@@ -122,4 +143,10 @@ export const findEventByIdService = async (id: number) => {
       },
     },
   });
+
+  if (!event) {
+    throw new ApiError("Event not found.", 404);
+  }
+
+  return event;
 };

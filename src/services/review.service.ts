@@ -1,11 +1,21 @@
-import { prisma } from "../lib/prisma.js";
+import { Prisma } from "../generated/prisma/client.js";
 import { StatusTransaction, UserRole } from "../generated/prisma/enums.js";
+import { prisma } from "../lib/prisma.js";
+import { ApiError } from "../utils/api-error.js";
 
 export interface CreateReviewInput {
   userId: number;
   transactionId: number;
   rating: number;
   comment: string;
+}
+
+export interface OrganizerReviewsFilter {
+  page?: number;
+  take?: number;
+  search?: string;
+  eventName?: string;
+  rating?: number | string;
 }
 
 /**
@@ -16,11 +26,14 @@ export const createReviewService = async (input: CreateReviewInput) => {
 
   const numericRating = Number(rating);
   if (isNaN(numericRating) || numericRating < 1 || numericRating > 5) {
-    throw new Error("Rating must be between 1 and 5 stars.");
+    throw new ApiError("Rating must be between 1 and 5 stars.", 400);
   }
 
   if (!comment || comment.trim().length < 3) {
-    throw new Error("Review comment must be at least 3 characters long.");
+    throw new ApiError(
+      "Review comment must be at least 3 characters long.",
+      400,
+    );
   }
 
   return await prisma.$transaction(async (tx) => {
@@ -30,8 +43,15 @@ export const createReviewService = async (input: CreateReviewInput) => {
       select: { id: true, role: true },
     });
 
-    if (!user || user.role !== UserRole.CUSTOMER) {
-      throw new Error("Only customers are allowed to submit event reviews.");
+    if (!user) {
+      throw new ApiError("User account not found.", 404);
+    }
+
+    if (user.role !== UserRole.CUSTOMER) {
+      throw new ApiError(
+        "Only customers are allowed to submit event reviews.",
+        403,
+      );
     }
 
     // 1b. Fetch transaction with event details and existing attendances/reviews
@@ -56,27 +76,36 @@ export const createReviewService = async (input: CreateReviewInput) => {
     });
 
     if (!transaction) {
-      throw new Error("Transaction not found.");
+      throw new ApiError("Transaction not found.", 404);
     }
 
     if (transaction.userId !== userId) {
-      throw new Error("Unauthorized: You can only review your own transaction.");
+      throw new ApiError(
+        "Forbidden: You can only review your own transaction.",
+        403,
+      );
     }
 
     // 1c. Condition 1: Transaction status must be DONE
     if (transaction.status !== StatusTransaction.DONE) {
-      throw new Error("You can only review a transaction when its status is DONE.");
+      throw new ApiError(
+        "You can only review a transaction when its status is DONE.",
+        400,
+      );
     }
 
     const event = transaction.transactionItems[0]?.ticketType?.event;
     if (!event) {
-      throw new Error("Event not found for this transaction.");
+      throw new ApiError("Event not found for this transaction.", 404);
     }
 
     // 1d. Condition 2: Event's endDate must be earlier than current date
     const now = new Date();
     if (new Date(event.endDate) >= now) {
-      throw new Error("You can only review this event after the event has ended.");
+      throw new ApiError(
+        "You can only review this event after the event has ended.",
+        400,
+      );
     }
 
     // 1e. Find or create the Attendance record linking User + Event + Transaction
@@ -84,7 +113,7 @@ export const createReviewService = async (input: CreateReviewInput) => {
     if (!attendance) {
       const totalTickets = transaction.transactionItems.reduce(
         (sum, item) => sum + item.quantity,
-        0
+        0,
       );
 
       attendance = await tx.attendance.create({
@@ -104,7 +133,10 @@ export const createReviewService = async (input: CreateReviewInput) => {
 
     // 1f. Prevent duplicate reviews for the same transaction
     if (attendance.reviews && attendance.reviews.length > 0) {
-      throw new Error("You have already submitted a review for this transaction.");
+      throw new ApiError(
+        "You have already submitted a review for this transaction.",
+        409,
+      );
     }
 
     // 1g. Save the Review
@@ -122,43 +154,100 @@ export const createReviewService = async (input: CreateReviewInput) => {
 };
 
 /**
- * 2. Fetch all reviews for the logged-in Event Organizer's panel (Sorted by newest)
+ * 2. Fetch paginated & filtered reviews for the logged-in Event Organizer's panel (Sorted by newest)
  */
-export const getOrganizerReviewsService = async (organizerId: number) => {
-  // Fetch all events owned by this organizer (so the filter dropdown shows all their events)
-  const organizerEvents = await prisma.event.findMany({
-    where: { userId: organizerId },
-    select: { id: true, name: true },
-    orderBy: { createdAt: "desc" },
-  });
+export const getOrganizerReviewsService = async (
+  organizerId: number,
+  filters: OrganizerReviewsFilter = {},
+) => {
+  const page = Math.max(1, Number(filters.page) || 1);
+  const take = Math.max(1, Math.min(50, Number(filters.take) || 5));
+  const skip = (page - 1) * take;
 
-  // Fetch all reviews for events organized by this organizer, sorted by newest first
-  const rawReviews = await prisma.review.findMany({
-    where: {
-      attendance: {
-        event: {
-          userId: organizerId,
-        },
+  // Base filter: all reviews belonging to events created by this organizer
+  const baseWhere: Prisma.ReviewWhereInput = {
+    attendance: {
+      event: {
+        userId: organizerId,
       },
     },
-    include: {
-      user: {
-        select: { id: true, name: true, profilePicture: true },
+  };
+
+  // Dynamic filter for paginated review list (search, eventName, rating)
+  const filteredWhere: Prisma.ReviewWhereInput = {
+    attendance: {
+      event: {
+        userId: organizerId,
+        ...(filters.eventName && filters.eventName !== "ALL"
+          ? { name: filters.eventName }
+          : {}),
       },
-      attendance: {
-        include: {
+    },
+  };
+
+  if (filters.rating && filters.rating !== "ALL") {
+    const parsedRating = Number(filters.rating);
+    if (!isNaN(parsedRating) && parsedRating >= 1 && parsedRating <= 5) {
+      filteredWhere.rating = parsedRating;
+    }
+  }
+
+  if (filters.search && filters.search.trim() !== "") {
+    const keyword = filters.search.trim();
+    filteredWhere.OR = [
+      { user: { name: { contains: keyword, mode: "insensitive" } } },
+      { comment: { contains: keyword, mode: "insensitive" } },
+      {
+        attendance: {
           event: {
-            select: { id: true, name: true },
+            userId: organizerId,
+            name: { contains: keyword, mode: "insensitive" },
           },
         },
       },
-    },
-    orderBy: {
-      createdAt: "desc", // Sorted by newest first
-    },
-  });
+    ];
+  }
 
-  // Map into the exact shape used by EventOrganizerReviews.tsx
+  // Run all 4 queries in parallel:
+  // 1) Organizer's events for dropdown
+  // 2) Overall average rating & total review count (unfiltered)
+  // 3) Paginated & filtered reviews list
+  // 4) Count of filtered reviews for pagination metadata
+  const [organizerEvents, overallAggregate, rawReviews, filteredTotal] =
+    await Promise.all([
+      prisma.event.findMany({
+        where: { userId: organizerId },
+        select: { id: true, name: true },
+        orderBy: { createdAt: "desc" },
+      }),
+      prisma.review.aggregate({
+        where: baseWhere,
+        _avg: { rating: true },
+        _count: { id: true },
+      }),
+      prisma.review.findMany({
+        where: filteredWhere,
+        include: {
+          user: {
+            select: { id: true, name: true, profilePicture: true },
+          },
+          attendance: {
+            include: {
+              event: {
+                select: { id: true, name: true },
+              },
+            },
+          },
+        },
+        orderBy: {
+          createdAt: "desc", // Sorted by newest first
+        },
+        skip,
+        take,
+      }),
+      prisma.review.count({ where: filteredWhere }),
+    ]);
+
   const formattedReviews = rawReviews.map((r) => ({
     id: r.id,
     customerName: r.user.name,
@@ -168,22 +257,25 @@ export const getOrganizerReviewsService = async (organizerId: number) => {
     reviewDate: r.createdAt.toISOString(),
   }));
 
-  // Calculate overall Average Rating and Total Reviews across all reviews
-  const totalReviews = formattedReviews.length;
-  const averageRating =
-    totalReviews > 0
-      ? Number(
-          (
-            formattedReviews.reduce((sum, item) => sum + item.rating, 0) /
-            totalReviews
-          ).toFixed(1)
-        )
-      : 0;
+  const totalReviews = overallAggregate._count.id ?? 0;
+  const averageRating = overallAggregate._avg.rating
+    ? Number(overallAggregate._avg.rating.toFixed(1))
+    : 0;
+
+  const totalPages = Math.max(1, Math.ceil(filteredTotal / take));
 
   return {
     averageRating,
     totalReviews,
     events: organizerEvents.map((e) => e.name),
     reviews: formattedReviews,
+    meta: {
+      page,
+      take,
+      total: filteredTotal,
+      totalPages,
+      hasNextPage: page < totalPages,
+      hasPrevPage: page > 1,
+    },
   };
 };
