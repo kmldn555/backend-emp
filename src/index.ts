@@ -11,6 +11,7 @@ import { organizerDashboardRoutes } from "./routes/dashboard/organizer.dashboard
 import {categoryRoutes} from "./routes/category.route.js";
 import { startTransactionCronJob } from "./jobs/transaction.cron.js";
 import reviewRoutes from "./routes/review.route.js";
+import { customerDashboardRoutes } from "./routes/dashboard/customer.dashboard.route.js";
 
 const PORT = 8000;
 
@@ -32,6 +33,7 @@ app.use("/transactions", transactionRoutes);
 app.use("/admin", adminDashboardRoutes);
 app.use("/organizer", organizerDashboardRoutes)
 app.use("/reviews", reviewRoutes);
+app.use("/customer", customerDashboardRoutes)
 
 startTransactionCronJob()
 // errors

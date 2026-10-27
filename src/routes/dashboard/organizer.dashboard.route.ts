@@ -2,6 +2,7 @@ import express from "express";
 
 import {
   approveTransactionsController,
+  deleteEventController,
   findMyEventsController,
   getEventGuestListController,
   getOrganizerDonePaymentController,
@@ -13,6 +14,7 @@ import {
   getOrganizerTotalRevenueController,
   getOrganizerTotalTransactionsController,
   getOrganizerTransactionsController,
+  getVoucherEventController,
   rejectTransactionsController,
   updateEventController,
 } from "../../controllers/dashboards/organizer.dashboard.controller.js";
@@ -84,6 +86,22 @@ organizerDashboardRoutes.get(
   validate(guestListParamsSchema, "params"),
   validate(guestListQuerySchema, "query"),
   getEventGuestListController,
+);
+
+// Delete event (soft)
+organizerDashboardRoutes.delete(
+  "/my-events/:id/delete-event",
+  verifyToken(process.env.JWT_SECRET!),
+  verifyRole(["EVENTORGANIZER"]),
+  deleteEventController,
+);
+
+// Get event voucher
+organizerDashboardRoutes.get(
+  "/my-events/:id/vouchers",
+  verifyToken(process.env.JWT_SECRET!),
+  verifyRole(["EVENTORGANIZER"]),
+  getVoucherEventController,
 );
 
 // Get payment with status pending

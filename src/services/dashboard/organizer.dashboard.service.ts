@@ -1,3 +1,4 @@
+import { Result } from "pg";
 import { StatusTransaction } from "../../generated/prisma/enums.js";
 import { sendMail } from "../../lib/mail.js";
 import { prisma } from "../../lib/prisma.js";
@@ -7,7 +8,7 @@ import { UpdateEventInput } from "../../validators/organizer.dashboard.validator
 // 1. Overview
 export const getOrganizerEventService = async (organizerId: number) => {
   const totalEvents = await prisma.event.count({
-    where: { userId: organizerId },
+    where: { userId: organizerId, deletedAt: null },
   });
 
   return totalEvents;
@@ -165,12 +166,41 @@ export const getOrganizerSalesAnalyticsService = async (
 
 // 2. MyEvents
 
-export const findMyEventsService = async (organizerId: number) => {
-  const events = await prisma.event.findMany({
-    where: { userId: organizerId },
-    include: { category: true, ticketTypes: true, vouchers: true },
-    orderBy: { startDate: "asc" },
-  });
+// Menampilkan semua event dengan pagination
+export const findMyEventsService = async (
+  organizerId: number,
+  page: number,
+  take: number,
+  search: string = "",
+) => {
+  const where = {
+    userId: organizerId,
+    deletedAt: null,
+    ...(search.trim() && {
+      name: {
+        contains: search.trim(),
+        mode: "insensitive" as const,
+      },
+    }),
+  };
+
+  const [events, total] = await prisma.$transaction([
+    prisma.event.findMany({
+      where,
+      include: {
+        category: true,
+        ticketTypes: true,
+        vouchers: true,
+      },
+      orderBy: {
+        startDate: "asc",
+      },
+      skip: (page - 1) * take,
+      take,
+    }),
+
+    prisma.event.count({ where }),
+  ]);
 
   return {
     data: events.map((event) => ({
@@ -180,9 +210,16 @@ export const findMyEventsService = async (organizerId: number) => {
         0,
       ),
     })),
+    meta: {
+      page,
+      take,
+      total,
+      totalPages: Math.ceil(total / take),
+    },
   };
 };
 
+// Button Edit Event
 export const updateEventService = async (
   eventId: number,
   organizerId: number,
@@ -265,6 +302,7 @@ export const updateEventService = async (
   );
 };
 
+// Botton Guest List
 export const getEventGuestListService = async (
   eventId: number,
   organizerId: number,
@@ -350,8 +388,73 @@ export const getEventGuestListService = async (
   };
 };
 
+// Button Delete Event
+export const deleteEventService = async (
+  eventId: number,
+  organizerId: number,
+) => {
+  return prisma.$transaction(async (tx) => {
+    // 1. Cari event
+    const event = await tx.event.findUnique({
+      where: { id: eventId },
+    });
+
+    if (!event || event.deletedAt !== null) {
+      throw new ApiError("Event not found", 404);
+    }
+
+    // 2. Pastikan event milik organizer yang login
+    if (event.userId !== organizerId) {
+      throw new ApiError("You are not allowed to delete this event", 403);
+    }
+
+    // 3. pastikan event tidak sedang berlangsung
+    const now = new Date();
+    if (event.startDate <= now && event.endDate >= now) {
+      throw new ApiError("Event is ongoing", 403);
+    }
+
+    // 4. update deletedAt
+    const deletedEvent = await tx.event.update({
+      where: {
+        id: event.id,
+      },
+      data: {
+        deletedAt: new Date(),
+      },
+    });
+
+    return { data: deletedEvent };
+  });
+};
+
+//Button Voucher
+export const getVoucherEventService = async (
+  organizerId: number,
+  eventId: number,
+) => {
+  const voucher = await prisma.voucher.findMany({
+    where: {
+      eventId: eventId,
+      event: {
+        userId: organizerId,
+      },
+    },
+    select: {
+      code: true,
+      discountValue: true,
+      maxUsage: true,
+      startAt: true,
+      expiresAt: true,
+    },
+  });
+
+  return voucher;
+};
+
 // 3. Transaction
 
+// card get payment with done status
 export const getOrganizerDonePaymentService = async (organizerId: number) => {
   const result = await prisma.transaction.count({
     where: {
@@ -371,6 +474,7 @@ export const getOrganizerDonePaymentService = async (organizerId: number) => {
   return result ?? 0;
 };
 
+// card get payment with pending status
 export const getOrganizerPendingPaymentService = async (
   organizerId: number,
 ) => {
@@ -392,6 +496,7 @@ export const getOrganizerPendingPaymentService = async (
   return result ?? 0;
 };
 
+// card get payment with rejected status
 export const getOrganizerRejectedPaymentService = async (
   organizerId: number,
 ) => {
@@ -580,7 +685,7 @@ export const getOrganizerTotalTransactionsService = async (
   return totalTransactions;
 };
 
-// update status by button approved
+// update status by button approve
 export const approveTransactionsService = async (transactionId: number) => {
   const result = await prisma.$transaction(async (tx) => {
     // 1. Ambil transaksi jika ada
@@ -785,10 +890,47 @@ export const rejectTransactionsService = async (transactionId: number) => {
       });
     }
 
-    // pengembalian point
+    // 9. pengembalian point
+    if (transaction.pointsDiscount > 0) {
+      const now = new Date();
 
+      const activeLots = await tx.pointLot.findMany({
+        where: {
+          userId: transaction.userId,
+          remainingAmount: { gte: 0 },
+          expiresAt: { gt: now },
+        },
+        orderBy: {
+          expiresAt: "asc",
+        },
+      });
 
-    // 9. update status pada transaction
+      let pointsLeftToRestore = transaction.pointsDiscount;
+
+      for (const lot of activeLots) {
+        if (pointsLeftToRestore <= 0) break;
+
+        // Hitung kapasitas pengembalian agar remainingAmount tidak melebihi amount dari tiap active lot
+        const restoreCapacity = Math.max(0, lot.amount - lot.remainingAmount);
+
+        if (restoreCapacity <= 0) continue;
+
+        const restoreAmount = Math.min(pointsLeftToRestore, restoreCapacity);
+
+        await tx.pointLot.update({
+          where: { id: lot.id },
+          data: {
+            remainingAmount: {
+              increment: restoreAmount,
+            },
+          },
+        });
+
+        pointsLeftToRestore -= restoreAmount;
+      }
+    }
+
+    // 10. update status pada transaction
     const newStatus = await tx.transaction.update({
       where: { id: transactionId },
       data: {
@@ -796,7 +938,7 @@ export const rejectTransactionsService = async (transactionId: number) => {
       },
     });
 
-    // 10. Mengambil data untuk email rejection
+    // 11. Mengambil data untuk email rejection
     const customerName = transaction.user.name;
     const customerEmail = transaction.user.email;
 
@@ -832,7 +974,7 @@ export const rejectTransactionsService = async (transactionId: number) => {
     };
   });
 
-  // 11. Kirim  email
+  // 12. Kirim  email
   try {
     await sendMail({
       to: result.customerEmail,
