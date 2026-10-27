@@ -1,6 +1,7 @@
 import type { Request, Response } from "express";
 import {
   approveTransactionsService,
+  deleteEventService,
   findMyEventsService,
   getEventGuestListService,
   getOrganizerDonePaymentService,
@@ -12,6 +13,7 @@ import {
   getOrganizerTotalRevenueService,
   getOrganizerTotalTransactionsService,
   getOrganizerTransactionsService,
+  getVoucherEventService,
   rejectTransactionsService,
   updateEventService,
 } from "../../services/dashboard/organizer.dashboard.service.js";
@@ -66,9 +68,15 @@ export const getOrganizerSalesAnalyticsController = async (
   res.status(200).send(result);
 };
 
+// my events
 export const findMyEventsController = async (req: Request, res: Response) => {
   const organizerId = res.locals.user.id;
-  const result = await findMyEventsService(organizerId);
+
+  const page = Math.max(1, Number(req.query.page) || 1);
+  const take = Math.min(100, Math.max(1, Number(req.query.take) || 6));
+  const search = String(req.query.search ?? "");
+
+  const result = await findMyEventsService(organizerId, page, take, search);
 
   res.status(200).send(result);
 };
@@ -122,6 +130,30 @@ export const getEventGuestListController = async (
   return res.status(200).json(result);
 };
 
+export const deleteEventController = async (req: Request, res: Response) => {
+  const eventId = Number(req.params.id);
+  const organizerId = res.locals.user.id;
+
+  const result = await deleteEventService(eventId, organizerId);
+
+  res.status(200).send(result);
+};
+
+export const getVoucherEventController = async (
+  req: Request,
+  res: Response,
+) => {
+  console.log("VOUCHER CONTROLLER HIT");
+
+  const organizerId = res.locals.user.id;
+  const eventId = Number(req.params.id);
+
+  const result = await getVoucherEventService(organizerId, eventId);
+
+  res.status(200).send(result);
+};
+
+//transactions
 export const getOrganizerPendingPaymentController = async (
   req: Request,
   res: Response,

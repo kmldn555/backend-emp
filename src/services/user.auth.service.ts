@@ -113,7 +113,7 @@ export const registerService = async (body: RegisterUserSchema) => {
   );
 
   // 7. Kirim email welcoming (perbaikannya tidak perlu diawait)
-  sendMail({
+  await sendMail({
     to: body.email,
     subject: "Welcome to APPTIX",
     templateName: "welcome.hbs",
