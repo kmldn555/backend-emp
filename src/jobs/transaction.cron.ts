@@ -2,7 +2,7 @@ import cron from "node-cron";
 import { sweepOverdueTransactions } from "../services/transaction.service.js";
 
 export const startTransactionCronJob = () => {
-  console.log("[Cron] Transaction sweeper initialized (runs every 1 minute)");
+  console.log("[Cron] Transaction sweeper initialized (runs every 5 minute)");
 
   // 1. Run once immediately when the server starts so you don't wait 60s
   sweepOverdueTransactions()
@@ -13,8 +13,8 @@ export const startTransactionCronJob = () => {
     })
     .catch((err) => console.error("[Cron Startup Error]:", err));
 
-  // 2. Schedule to run every 1 minute ("* * * * *")
-  cron.schedule("* * * * *", async () => {
+  // 2. Schedule to run every 5 minute 
+  cron.schedule("*/5 * * * *", async () => {
     try {
       const { expiredCount, canceledCount } = await sweepOverdueTransactions();
       console.log(
